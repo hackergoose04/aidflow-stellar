@@ -1,0 +1,75 @@
+{
+  "test_rows": 1797,
+  "anomalies": 180,
+  "threshold": 0.89,
+  "roc_auc": 0.992,
+  "average_precision": 0.93,
+  "ml": {
+    "precision": 0.793,
+    "recall": 0.872,
+    "flagged": 198,
+    "false_alarms": 41,
+    "false_positive_rate": 0.025,
+    "review_share": 0.11,
+    "workload_reduction": 0.89,
+    "recall_by_type": {
+      "amount_outlier": 1.0,
+      "burst": 1.0,
+      "duplicate_payout": 0.778,
+      "night_new_ben": 1.0,
+      "shared_wallet": 0.667,
+      "wallet_switch": 0.278
+    }
+  },
+  "rules": {
+    "precision": 0.76,
+    "recall": 0.811,
+    "flagged": 192,
+    "false_alarms": 46,
+    "false_positive_rate": 0.028,
+    "review_share": 0.107,
+    "workload_reduction": 0.893,
+    "recall_by_type": {
+      "amount_outlier": 0.889,
+      "burst": 0.844,
+      "duplicate_payout": 1.0,
+      "night_new_ben": 0.0,
+      "shared_wallet": 1.0,
+      "wallet_switch": 1.0
+    }
+  },
+  "rules_or_ml": {
+    "precision": 0.741,
+    "recall": 1.0,
+    "flagged": 243,
+    "false_alarms": 63,
+    "false_positive_rate": 0.039,
+    "review_share": 0.135,
+    "workload_reduction": 0.865,
+    "recall_by_type": {
+      "amount_outlier": 1.0,
+      "burst": 1.0,
+      "duplicate_payout": 1.0,
+      "night_new_ben": 1.0,
+      "shared_wallet": 1.0,
+      "wallet_switch": 1.0
+    }
+  },
+  "manual_all": {
+    "precision": 0.1,
+    "recall": 1.0,
+    "flagged": 1797,
+    "false_alarms": 1617,
+    "false_positive_rate": 1.0,
+    "review_share": 1.0,
+    "workload_reduction": 0.0,
+    "recall_by_type": {
+      "amount_outlier": 1.0,
+      "burst": 1.0,
+      "duplicate_payout": 1.0,
+      "night_new_ben": 1.0,
+      "shared_wallet": 1.0,
+      "wallet_switch": 1.0
+    }
+  }
+}

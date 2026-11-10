@@ -1,0 +1,90 @@
+{
+  "transfers": 532909,
+  "fraud": 4097,
+  "train_rows": 481440,
+  "test_rows": 51469,
+  "test_fraud": 1868,
+  "results": [
+    {
+      "method": "random review",
+      "roc_auc": 0.508,
+      "average_precision": 0.0373,
+      "at_budget": [
+        {
+          "review_share": 0.01,
+          "fraud_caught": 0.01,
+          "precision": 0.037
+        },
+        {
+          "review_share": 0.05,
+          "fraud_caught": 0.053,
+          "precision": 0.038
+        },
+        {
+          "review_share": 0.1,
+          "fraud_caught": 0.107,
+          "precision": 0.039
+        }
+      ]
+    },
+    {
+      "method": "model as shipped (synthetic-trained)",
+      "roc_auc": 0.613,
+      "average_precision": 0.0604,
+      "at_budget": [
+        {
+          "review_share": 0.01,
+          "fraud_caught": 0.02,
+          "precision": 0.072
+        },
+        {
+          "review_share": 0.05,
+          "fraud_caught": 0.115,
+          "precision": 0.084
+        },
+        {
+          "review_share": 0.1,
+          "fraud_caught": 0.188,
+          "precision": 0.068
+        }
+      ]
+    },
+    {
+      "method": "model refit on own history",
+      "roc_auc": 0.788,
+      "average_precision": 0.1647,
+      "at_budget": [
+        {
+          "review_share": 0.01,
+          "fraud_caught": 0.094,
+          "precision": 0.342
+        },
+        {
+          "review_share": 0.05,
+          "fraud_caught": 0.268,
+          "precision": 0.195
+        },
+        {
+          "review_share": 0.1,
+          "fraud_caught": 0.49,
+          "precision": 0.178
+        }
+      ]
+    }
+  ],
+  "rules": {
+    "flag_rate": 0.0005,
+    "fraud_caught": 0.0,
+    "precision": 0.0
+  },
+  "single_feature_auc": {
+    "log_gap_hours": 0.786,
+    "hour_sin": 0.741,
+    "hour_cos": 0.549,
+    "log_amount": 0.535,
+    "amount_vs_global": 0.535,
+    "ben_requests_24h": 0.524,
+    "amount_vs_own": 0.511,
+    "same_amount_24h": 0.5
+  }
+}

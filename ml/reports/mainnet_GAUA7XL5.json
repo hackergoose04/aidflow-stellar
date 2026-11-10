@@ -1,0 +1,25 @@
+{
+  "account": "GAUA7XL5K54CC2DDGP77FJ2YBHRJLT36CPZDXWPM6MP7MANOGG77PNJU",
+  "data": {
+    "payouts": 19223,
+    "recipients": 4372,
+    "from": "2026-11-09 16:54:22+00:00",
+    "to": "2026-11-10 01:14:12+00:00",
+    "days": 0.3,
+    "amount_median": 5.07,
+    "amount_p90": 137.58199999999997,
+    "amount_max": 18989.0,
+    "payouts_per_recipient_median": 1.0,
+    "payouts_per_recipient_max": 8942
+  },
+  "flag_rate": {
+    "rule_amount_above_limit": 0.0319,
+    "rule_possible_duplicate": 0.4635,
+    "rules_any": 0.4923,
+    "model_as_shipped": 0.9,
+    "rules_or_model_as_shipped": 0.9,
+    "model_refit_on_own_history": 0.1741,
+    "rules_or_model_refit": 0.5713
+  },
+  "synthetic_reference_false_alarm_rate": 0.045
+}

@@ -1,0 +1,91 @@
+{
+  "records": 2000,
+  "chain_payouts": 1723,
+  "stray_payouts": 20,
+  "category_accuracy": 1.0,
+  "reason_accuracy": 1.0,
+  "strays_found": 20,
+  "by_scenario": {
+    "clean_confirmed": {
+      "count": 1192,
+      "correct": 1192
+    },
+    "rejected": {
+      "count": 69,
+      "correct": 69
+    },
+    "held": {
+      "count": 46,
+      "correct": 46
+    },
+    "invalid": {
+      "count": 23,
+      "correct": 23
+    },
+    "approved_not_paid": {
+      "count": 49,
+      "correct": 49
+    },
+    "failed": {
+      "count": 58,
+      "correct": 58
+    },
+    "submitted_pending": {
+      "count": 56,
+      "correct": 56
+    },
+    "unknown_but_landed": {
+      "count": 28,
+      "correct": 28
+    },
+    "amount_differs": {
+      "count": 49,
+      "correct": 49
+    },
+    "wallet_differs": {
+      "count": 52,
+      "correct": 52
+    },
+    "asset_differs": {
+      "count": 61,
+      "correct": 61
+    },
+    "missing_on_chain": {
+      "count": 51,
+      "correct": 51
+    },
+    "paid_twice": {
+      "count": 55,
+      "correct": 55
+    },
+    "tx_hash_differs": {
+      "count": 33,
+      "correct": 33
+    },
+    "paid_but_rejected": {
+      "count": 41,
+      "correct": 41
+    },
+    "claimed": {
+      "count": 68,
+      "correct": 68
+    },
+    "paid_but_failed": {
+      "count": 69,
+      "correct": 69
+    }
+  },
+  "confusion": {
+    "MATCHED -> MATCHED": 1260,
+    "MISMATCH -> MISMATCH": 411,
+    "NOT_EXECUTED -> NOT_EXECUTED": 245,
+    "PENDING_VERIFICATION -> PENDING_VERIFICATION": 84
+  },
+  "categories": [
+    "MATCHED",
+    "PENDING_VERIFICATION",
+    "MISMATCH",
+    "NOT_EXECUTED"
+  ],
+  "note": "Synthetic ledger with injected discrepancies; checks the engine, not memo discipline in the field."
+}

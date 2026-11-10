@@ -1,0 +1,10 @@
+.env
+__pycache__/
+*.pyc
+.venv/
+data/spike_ledger.jsonl
+data/aidflow.db*
+ml/data/
+# Lists of real mainnet accounts flagged as anomalous: kept local, never published
+ml/reports/*_top.csv
+.DS_Store
