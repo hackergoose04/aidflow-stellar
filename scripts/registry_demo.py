@@ -29,6 +29,7 @@ from backend.app.main import app  # noqa: E402
 
 def part1() -> bool:
     config.DB_PATH = Path(tempfile.mkdtemp()) / "registry_demo.db"
+    config.DATABASE_URL = None  # a throwaway local database, never the shared one
     c = TestClient(app)
     t = int(time.time())
     batch = f"DEMO-{t}"

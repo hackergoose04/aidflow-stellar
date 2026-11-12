@@ -1,7 +1,6 @@
 """Review: a human approves, holds, corrects or declines each request before money moves."""
 from __future__ import annotations
 
-import sqlite3
 
 from .. import config, db, identity
 from ..db import Status
@@ -12,7 +11,7 @@ CORRECTABLE = (*OPEN, Status.INVALID)          # an invalid record can be fixed,
 EDITABLE = ("beneficiary_id", "wallet", "amount", "batch_id", "payout_slot", "created_at")
 
 
-def decide(conn: sqlite3.Connection, ref: str, approve: bool, reviewer: str,
+def decide(conn: db.Connection, ref: str, approve: bool, reviewer: str,
            note: str | None = None) -> dict:
     row = db.get(conn, ref)
     if row is None:
@@ -31,7 +30,7 @@ def decide(conn: sqlite3.Connection, ref: str, approve: bool, reviewer: str,
     return db.get(conn, ref)
 
 
-def hold(conn: sqlite3.Connection, ref: str, reviewer: str, note: str | None = None) -> dict:
+def hold(conn: db.Connection, ref: str, reviewer: str, note: str | None = None) -> dict:
     """Park a request for further checks. It stays out of 'approve clean' until decided."""
     row = db.get(conn, ref)
     if row is None:
@@ -45,7 +44,7 @@ def hold(conn: sqlite3.Connection, ref: str, reviewer: str, note: str | None = N
     return db.get(conn, ref)
 
 
-def correct(conn: sqlite3.Connection, ref: str, changes: dict, reviewer: str,
+def correct(conn: db.Connection, ref: str, changes: dict, reviewer: str,
             note: str | None = None) -> dict:
     """Fix a request's data (e.g. a mistyped wallet), then screen it again from scratch.
 
@@ -91,7 +90,7 @@ def correct(conn: sqlite3.Connection, ref: str, changes: dict, reviewer: str,
     return db.get(conn, ref)
 
 
-def approve_clean(conn: sqlite3.Connection, reviewer: str) -> list[str]:
+def approve_clean(conn: db.Connection, reviewer: str) -> list[str]:
     """Bulk-approve every pending request that has no flags. Flagged ones stay for a human."""
     refs = [r["request_ref"] for r in conn.execute(
         "SELECT request_ref FROM requests WHERE status = ? AND flags = '[]' AND payout_slot = ?",
@@ -109,7 +108,7 @@ def approve_clean(conn: sqlite3.Connection, reviewer: str) -> list[str]:
     return approved
 
 
-def retry(conn: sqlite3.Connection, ref: str, reviewer: str) -> dict:
+def retry(conn: db.Connection, ref: str, reviewer: str) -> dict:
     """Send a FAILED request back to APPROVED. Safe: FAILED means the old tx can never land."""
     row = db.get(conn, ref)
     if row is None:

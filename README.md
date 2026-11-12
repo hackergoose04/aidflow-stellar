@@ -36,6 +36,8 @@ uvicorn backend.app.main:app --reload   # then open http://127.0.0.1:8000/docs
 pytest backend/tests                    # offline tests
 ```
 
+Storage is local SQLite by default; set `DATABASE_URL` in `.env` to use Postgres (Neon).
+
 Details: [backend/README.md](backend/README.md). Request CSV format: [data/samples/README.md](data/samples/README.md).
 
 ## Frontend

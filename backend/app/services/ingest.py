@@ -5,7 +5,6 @@ from __future__ import annotations
 import csv
 import io
 import json
-import sqlite3
 from datetime import datetime, timezone
 from decimal import Decimal, InvalidOperation
 
@@ -60,7 +59,7 @@ def validate(row: dict) -> list[str]:
     return errors
 
 
-def ingest_csv(conn: sqlite3.Connection, text: str) -> dict:
+def ingest_csv(conn: db.Connection, text: str) -> dict:
     reader = csv.DictReader(io.StringIO(text.lstrip("﻿")))
     missing = [c for c in REQUIRED if c not in (reader.fieldnames or [])]
     if missing:

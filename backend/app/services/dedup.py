@@ -5,14 +5,13 @@ Exact duplicate request_refs are already rejected at ingest. This catches the so
   * same beneficiary and payout slot twice in one disbursement batch"""
 from __future__ import annotations
 
-import sqlite3
 from datetime import datetime, timedelta
 
 from .. import config, db
 from ..db import INACTIVE
 
 
-def flag_duplicates(conn: sqlite3.Connection, refs: list[str]) -> None:
+def flag_duplicates(conn: db.Connection, refs: list[str]) -> None:
     window = timedelta(hours=config.DUPLICATE_WINDOW_HOURS)
     for ref in refs:
         row = db.get(conn, ref)

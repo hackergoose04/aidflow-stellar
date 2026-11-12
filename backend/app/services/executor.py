@@ -9,13 +9,12 @@ The status update in step 2 is conditional on status = APPROVED, so two workers 
 the same row."""
 from __future__ import annotations
 
-import sqlite3
 
 from .. import config, db, registry, soroban, stellar_client as sc
 from ..db import Status
 
 
-def repair_registry(conn: sqlite3.Connection) -> list[str]:
+def repair_registry(conn: db.Connection) -> list[str]:
     """Bring local registry state back in line with the chain after an interruption.
 
     If the backend stops between a confirmed payment and the mark_paid write, the chain can say
@@ -51,7 +50,7 @@ def _paid_on_chain_already(ref: str) -> str | None:
     return None
 
 
-def settle_registry(conn: sqlite3.Connection, ref: str, status: str) -> None:
+def settle_registry(conn: db.Connection, ref: str, status: str) -> None:
     """After a payment's outcome is known, record it in the on-chain registry."""
     row = db.get(conn, ref)
     if not row.get("registry_key") or row.get("registry_status") != "RESERVED":
@@ -74,7 +73,7 @@ def settle_registry(conn: sqlite3.Connection, ref: str, status: str) -> None:
     db.log(conn, ref, f"registry_{new.lower()}", {"tx_hash": h})
 
 
-def _reserve(conn: sqlite3.Connection, row: dict) -> dict | None:
+def _reserve(conn: db.Connection, row: dict) -> dict | None:
     """Reserve the registry key. Returns a result dict if the request must NOT be paid now."""
     ref = row["request_ref"]
     key = (bytes.fromhex(row["registry_key"]) if row["registry_key"]
@@ -123,7 +122,7 @@ def _reserve(conn: sqlite3.Connection, row: dict) -> dict | None:
     return None
 
 
-def run(conn: sqlite3.Connection, limit: int = 20, batch: str | None = None) -> list[dict]:
+def run(conn: db.Connection, limit: int = 20, batch: str | None = None) -> list[dict]:
     """Pay up to `limit` APPROVED requests, oldest first; `batch` restricts to one disbursement batch."""
     dist, asset = sc.distribution_keypair(), sc.aid_asset()
     server = sc.horizon()

@@ -8,7 +8,6 @@ they claim it. This looks each one up on chain:
 Direct payments land in the wallet immediately, so they have no claim step."""
 from __future__ import annotations
 
-import sqlite3
 
 from stellar_sdk.exceptions import NotFoundError
 
@@ -38,7 +37,7 @@ def _claimer(balance_id: str) -> tuple[str | None, str | None]:
     return None, None
 
 
-def check(conn: sqlite3.Connection) -> list[dict]:
+def check(conn: db.Connection) -> list[dict]:
     rows = [dict(r) for r in conn.execute(
         "SELECT request_ref, wallet, tx_hash, balance_id FROM requests"
         " WHERE status = ? AND method = 'claimable_balance'", (Status.CONFIRMED,))]

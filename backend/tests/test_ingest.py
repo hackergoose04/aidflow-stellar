@@ -11,9 +11,11 @@ import pytest
 from fastapi.testclient import TestClient
 from stellar_sdk import Account, Keypair, scval
 
-from backend.app import config, registry, stellar_client as sc
+from backend.app import config, db, registry, stellar_client as sc
 from backend.app.main import app
 from backend.app.services import screening
+
+from conftest import sqlite_only
 
 SAMPLE = config.ROOT / "data" / "samples" / "requests.csv"
 LABELS = config.ROOT / "data" / "samples" / "requests_labels.csv"
@@ -190,6 +192,7 @@ def test_approved_slots_pay_separately_but_cannot_pay_twice(client, monkeypatch)
     assert repeated["registry_status"] == "BLOCKED" and repeated["tx_hash"] is None
 
 
+@sqlite_only
 def test_payout_slot_migration_preserves_old_registry_key(client, monkeypatch):
     monkeypatch.setenv("PROGRAM_ID", "PROGRAM")
     monkeypatch.setenv("REGISTRY_SECRET", "secret")
@@ -237,8 +240,9 @@ def test_beneficiary_ids_are_never_stored_raw(client):
                         f"P-1,Maria Lopez 1985,{w},50,AIDUSD,2026-11-01T10:00:00Z\n")
     stored = client.get("/requests/P-1").json()["beneficiary_id"]
     assert stored.startswith("H-") and "Maria" not in stored
-    raw = __import__("sqlite3").connect(config.DB_PATH)
-    dump = [str(tuple(r)) for t in ("requests", "events") for r in raw.execute(f"SELECT * FROM {t}")]
+    raw = db.connect()
+    dump = [str(dict(r)) for t in ("requests", "events") for r in raw.execute(f"SELECT * FROM {t}")]
+    raw.close()
     assert not any("Maria" in line for line in dump)  # not in any table, not in the audit log
     # Staff who know the real ID can still find the person.
     assert client.get("/beneficiaries/lookup", params={"id": "Maria Lopez 1985"}).json()["token"] == stored
