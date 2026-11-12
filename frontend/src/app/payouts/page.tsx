@@ -1,10 +1,10 @@
 "use client";
 
 import Link from "next/link";
-import { useCallback, useEffect, useState } from "react";
+import { Fragment, useCallback, useEffect, useState } from "react";
 import { get, post, type AidRequest, type ClaimResult, type PayoutResult, type VerifyResult } from "@/lib/api";
 import { formatAmount, formatTime } from "@/lib/format";
-import { Button, Card, ClaimBadge, ErrorNote, PageHeader, RegistryBadge, StatusBadge, TxLink } from "@/components/ui";
+import { Button, Card, ClaimBadge, Empty, ErrorNote, Notice, PageHeader, RegistryBadge, Stats, StatusBadge, TxLink } from "@/components/ui";
 
 const PAID_STATES = new Set(["SUBMITTED", "CONFIRMED", "CLAIMED", "FAILED", "UNKNOWN"]);
 
@@ -57,70 +57,65 @@ export default function Payouts() {
   return (
     <>
       <PageHeader title="Payouts"
-        subtitle="Each payout is first registered in the on-chain registry (one per person per batch), and its transaction hash is saved before it is sent, so neither a human slip nor a network hiccup can pay someone twice."
-        action={
-          <div className="flex gap-2">
-            <Button variant="secondary" disabled={!!busy} onClick={() => run("verify")}>
-              {busy === "verify" ? "Checking…" : "Verify & check claims"}
-            </Button>
-            <Button disabled={!!busy || !approved} onClick={() => run("pay")}>
-              {busy === "pay" ? "Paying…" : `Pay ${approved} approved`}
-            </Button>
-          </div>
-        } />
+        subtitle="Each payout is registered on chain first and its transaction hash saved before sending, so neither a human slip nor a network hiccup can pay someone twice."
+        action={<>
+          <Button variant="secondary" disabled={!!busy} onClick={() => run("verify")}>
+            {busy === "verify" ? "Checking…" : "Verify & check claims"}
+          </Button>
+          <Button disabled={!!busy || !approved} onClick={() => run("pay")}>
+            {busy === "pay" ? "Paying…" : `Pay ${approved} approved`}
+          </Button>
+        </>} />
       <ErrorNote error={error} />
-      {message && <div className="mb-4 rounded-lg border border-teal-200 bg-teal-50 px-4 py-3 text-sm text-teal-900">{message}</div>}
+      {message && <Notice tone="success">{message}</Notice>}
 
-      <div className="mb-4 grid grid-cols-2 gap-3 sm:grid-cols-5">
-        {[["CONFIRMED", "Confirmed (in wallet or awaiting claim)", "text-emerald-700"], ["CLAIMED", "Claimed by beneficiary", "text-teal-700"],
-          ["SUBMITTED", "In flight", "text-indigo-700"], ["UNKNOWN", "Unclear", "text-orange-700"],
-          ["FAILED", "Failed", "text-rose-700"]].map(([s, label, color]) => (
-          <div key={s} className="rounded-xl border border-stone-200 bg-white px-4 py-3">
-            <div className={`text-2xl font-semibold tabular-nums ${color}`}>{count(s)}</div>
-            <div className="text-xs text-stone-500">{label}</div>
-          </div>
-        ))}
-      </div>
+      <Stats items={[
+        { label: "Confirmed", value: count("CONFIRMED"), hint: "in wallet or awaiting claim" },
+        { label: "Claimed", value: count("CLAIMED"), hint: "picked up by beneficiary" },
+        { label: "In flight", value: count("SUBMITTED"), hint: "submitted, no result yet" },
+        { label: "Unclear", value: count("UNKNOWN"), hint: "run Verify", tone: count("UNKNOWN") ? "text-amber-600" : undefined },
+        { label: "Failed", value: count("FAILED"), hint: "nothing sent", tone: count("FAILED") ? "text-rose-600" : undefined },
+      ]} />
 
-      <Card>
+      <Card flush>
         {rows === null && !error ? (
-          <p className="text-sm text-stone-500">Loading…</p>
+          <Empty>Loading…</Empty>
         ) : !rows?.length ? (
-          <p className="text-sm text-stone-500">No payouts yet. Approve requests in <Link href="/review" className="text-teal-700 underline">Review</Link>, then pay them here.</p>
+          <Empty>No payouts yet. Approve requests in <Link href="/review" className="link">Review</Link>, then pay them here.</Empty>
         ) : (
           <div className="overflow-x-auto">
-            <table className="w-full min-w-[1100px] text-left text-sm [&_td]:pr-3">
-              <thead className="text-xs text-stone-500">
+            <table className="data-table min-w-[1000px]">
+              <thead>
                 <tr>
-                  <th className="py-2 font-medium">Ref</th>
-                  <th className="font-medium">Beneficiary</th>
-                  <th className="text-right font-medium">Amount</th>
-                  <th className="pl-6 font-medium">Method</th>
-                  <th className="font-medium">Status</th>
-                  <th className="font-medium">Delivery</th>
-                  <th className="font-medium">On-chain registry</th>
-                  <th className="font-medium">Sent</th>
-                  <th className="font-medium">Transaction</th>
+                  <th>Ref</th>
+                  <th>Beneficiary</th>
+                  <th className="text-right">Amount</th>
+                  <th>Status</th>
+                  <th>Delivery</th>
+                  <th>Registry</th>
+                  <th>Sent</th>
+                  <th>Transaction</th>
                 </tr>
               </thead>
               <tbody>
                 {rows.map((r) => (
-                  <tr key={r.request_ref} className="border-t border-stone-100 align-top">
-                    <td className="whitespace-nowrap py-2 font-mono text-xs">
+                  <Fragment key={r.request_ref}>
+                  <tr className={r.error ? "[&>td]:border-b-0" : ""}>
+                    <td className="whitespace-nowrap font-mono text-[12px] font-medium">
                       <Link href={`/requests/${encodeURIComponent(r.request_ref)}`} className="hover:underline">{r.request_ref}</Link>
                     </td>
-                    <td className="whitespace-nowrap font-mono text-xs text-stone-600">{r.beneficiary_id}</td>
-                    <td className="text-right tabular-nums">{formatAmount(r.amount)}</td>
-                    <td className="whitespace-nowrap pl-6 text-xs text-stone-600">{r.method === "payment" ? "Payment" : r.method === "claimable_balance" ? "Claimable balance" : "—"}</td>
-                    <td>
-                      <StatusBadge status={r.status} />
-                      {r.error && <div className="mt-1 max-w-xs text-xs text-rose-700">{r.error}</div>}
-                    </td>
-                    <td>{(r.status === "CONFIRMED" || r.status === "CLAIMED") ? <ClaimBadge method={r.method} status={r.claim_status} /> : <span className="text-xs text-stone-400">—</span>}</td>
+                    <td className="whitespace-nowrap font-mono text-[12px] text-zinc-500">{r.beneficiary_id}</td>
+                    <td className="text-right font-medium tabular-nums">{formatAmount(r.amount)}</td>
+                    <td><StatusBadge status={r.status} /></td>
+                    <td>{(r.status === "CONFIRMED" || r.status === "CLAIMED") ? <ClaimBadge method={r.method} status={r.claim_status} /> : <span className="text-[12px] text-zinc-300">—</span>}</td>
                     <td><RegistryBadge status={r.registry_status} /></td>
-                    <td className="whitespace-nowrap text-xs text-stone-500">{formatTime(r.submitted_at)}</td>
+                    <td className="whitespace-nowrap text-[12px] text-zinc-500">{formatTime(r.submitted_at)}</td>
                     <td className="whitespace-nowrap"><TxLink hash={r.tx_hash} /></td>
                   </tr>
+                  {r.error && (
+                    <tr><td colSpan={8} className="!pt-0 text-[12px] text-rose-600">{r.error}</td></tr>
+                  )}
+                  </Fragment>
                 ))}
               </tbody>
             </table>
