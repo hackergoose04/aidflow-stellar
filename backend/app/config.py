@@ -16,6 +16,10 @@ HORIZON_URL = os.getenv("HORIZON_URL", "https://horizon-testnet.stellar.org")
 RPC_URL = os.getenv("RPC_URL", "https://soroban-testnet.stellar.org")
 NETWORK_PASSPHRASE = Network.TESTNET_NETWORK_PASSPHRASE
 ASSET_CODE = os.getenv("ASSET_CODE", "AIDUSD")
+DEFAULT_PAYOUT_SLOT = "base"
+PAYOUT_SLOTS = frozenset({DEFAULT_PAYOUT_SLOT} | {
+    slot.strip().lower() for slot in os.getenv("PAYOUT_SLOTS", "").split(",") if slot.strip()
+})
 BASE_FEE = 100                 # stroops per operation
 TX_TIMEOUT_SECONDS = 30        # tx time bounds; after this an unsent tx can never land
 RECLAIM_AFTER_SECONDS = int(os.getenv("RECLAIM_AFTER_SECONDS", 30 * 24 * 3600))

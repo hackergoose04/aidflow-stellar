@@ -30,6 +30,7 @@ export interface AidEvent {
 export interface AidRequest {
   request_ref: string;
   batch_id: string | null;
+  payout_slot: string;
   beneficiary_id: string;
   wallet: string;
   amount: string;

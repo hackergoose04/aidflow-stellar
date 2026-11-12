@@ -130,6 +130,7 @@ function ReviewCard({ r, note, setNote, disabled, decide }: {
               <dl className="mt-2 grid grid-cols-[auto_1fr] gap-x-3 gap-y-0.5 text-xs text-stone-500">
                 <dt>Beneficiary</dt><dd className="text-stone-800">{r.beneficiary_id}</dd>
                 <dt>Batch</dt><dd className="text-stone-800">{r.batch_id ?? "—"}</dd>
+                <dt>Payout slot</dt><dd className="text-stone-800">{r.payout_slot}</dd>
                 <dt>Wallet</dt><dd className="font-mono text-stone-800">{shortKey(r.wallet, 6)}</dd>
                 <dt>Requested</dt><dd className="text-stone-800">{formatTime(r.created_at)}</dd>
                 <dt>AI risk</dt><dd><RiskBar score={r.risk_score} /></dd>

@@ -1,9 +1,9 @@
 """On-chain payout registry (contracts/aid_registry), Plan B: hashes only, no money.
 
-    key          = HMAC-SHA256(REGISTRY_SECRET, PROGRAM_ID | batch_id | beneficiary_id)
     request_hash = SHA-256(request_ref)   (also the payment's memo)
 
-One key = one payout per beneficiary per program and batch, enforced by the contract.
+One key = one payout slot per beneficiary per program and batch. The contract enforces
+uniqueness of the key. The base slot retains the original key format.
 The HMAC secret stays in .env, so the chain shows no beneficiary IDs and nobody can test
 guesses against it.
 
@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import hashlib
 import hmac
+import json
 import os
 
 from stellar_sdk import scval
@@ -39,9 +40,16 @@ def program() -> str:
     return os.getenv("PROGRAM_ID", "AIDFLOW-DEMO")
 
 
-def key_for(beneficiary_id: str, batch_id: str | None) -> bytes:
+def key_for(beneficiary_id: str, batch_id: str | None,
+            payout_slot: str = config.DEFAULT_PAYOUT_SLOT) -> bytes:
     secret = os.environ["REGISTRY_SECRET"].encode()
-    msg = f"{program()}|{batch_id or ''}|{beneficiary_id}".encode()
+    if payout_slot == config.DEFAULT_PAYOUT_SLOT:
+        # Old records and on-chain reservations already use this byte format.
+        msg = f"{program()}|{batch_id or ''}|{beneficiary_id}".encode()
+    else:
+        fields = json.dumps([program(), batch_id or "", beneficiary_id, payout_slot],
+                            separators=(",", ":"))
+        msg = f"aidflow:payout-slot:v1:{fields}".encode()
     return hmac.new(secret, msg, hashlib.sha256).digest()
 
 
@@ -69,7 +77,7 @@ def reserve(key: bytes, request_ref: str) -> tuple[str, str | None]:
 
     Returns (outcome, detail):
       RESERVED      key is now held by this request (tx hash in detail, or None if it already was)
-      BLOCKED       another request already holds this beneficiary + batch (its status in detail)
+      BLOCKED       another request already holds this payout slot (its status in detail)
       ALREADY_PAID  this very request is already PAID in the registry (payment tx hash in detail)
     """
     mine = sc.memo_hash(request_ref)

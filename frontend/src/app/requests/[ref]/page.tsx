@@ -12,6 +12,7 @@ import {
 
 const FIELDS = [
   ["beneficiary_id", "Beneficiary ID"], ["wallet", "Wallet"], ["amount", "Amount"], ["batch_id", "Batch"],
+  ["payout_slot", "Payout slot"],
   ["created_at", "Requested at (ISO)"],
 ] as const;
 type Field = (typeof FIELDS)[number][0];
@@ -37,7 +38,7 @@ export default function RequestDetail() {
         setReq(r);
         // Beneficiary starts empty: only a token is stored; staff type the real ID to change it.
         setEdit({ beneficiary_id: "", wallet: r.wallet, amount: r.amount ? String(Number(r.amount) || r.amount) : "",
-          batch_id: r.batch_id ?? "", created_at: r.created_at });
+          batch_id: r.batch_id ?? "", payout_slot: r.payout_slot, created_at: r.created_at });
         setError(null);
       }, (e) => setError((e as Error).message));
   }, [id]);
@@ -87,6 +88,7 @@ export default function RequestDetail() {
               <span className="ml-2 text-xs text-stone-400">pseudonymous (HMAC of the real ID)</span>
             </dd>
             <dt className="text-stone-500">Batch</dt><dd>{req.batch_id ?? "—"}</dd>
+            <dt className="text-stone-500">Payout slot</dt><dd>{req.payout_slot}</dd>
             <dt className="text-stone-500">Wallet</dt>
             <dd className="break-all font-mono text-xs">
               <a href={explorerAccount(req.wallet)} target="_blank" rel="noreferrer" className="text-teal-700 hover:underline">{req.wallet} ↗</a>
@@ -159,9 +161,8 @@ export default function RequestDetail() {
                   </>
                 ) : req.registry_status === "BLOCKED" ? (
                   <p className="text-xs text-stone-600">
-                    Nothing was sent: the on-chain registry already holds a payout for this person in batch{" "}
-                    <b>{req.batch_id}</b>. Retrying would be refused again. If this really is a separate payout,
-                    it belongs in another batch.
+                    Nothing was sent. This beneficiary already has a registered payout in slot{" "}
+                    <b>{req.payout_slot}</b> of batch <b>{req.batch_id}</b>.
                   </p>
                 ) : (
                   <>

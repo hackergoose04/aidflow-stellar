@@ -57,7 +57,7 @@ export default function Payouts() {
   return (
     <>
       <PageHeader title="Payouts"
-        subtitle="Each payout is first registered in the on-chain registry (one per person per batch), and its transaction hash is saved before it is sent, so neither a human slip nor a network hiccup can pay someone twice."
+        subtitle="Send approved payouts and verify their status. When enabled, the on-chain registry blocks repeat payments in the same payout slot."
         action={
           <div className="flex gap-2">
             <Button variant="secondary" disabled={!!busy} onClick={() => run("verify")}>

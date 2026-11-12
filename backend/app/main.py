@@ -48,6 +48,7 @@ class Correction(BaseModel):
     wallet: str | None = None
     amount: str | None = None
     batch_id: str | None = None
+    payout_slot: str | None = None
     created_at: str | None = None
 
 

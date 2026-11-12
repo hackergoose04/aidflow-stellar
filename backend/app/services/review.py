@@ -3,13 +3,13 @@ from __future__ import annotations
 
 import sqlite3
 
-from .. import db, identity
+from .. import config, db, identity
 from ..db import Status
 from . import dedup, ingest, screening
 
 OPEN = (Status.PENDING_REVIEW, Status.HELD)  # states a reviewer can approve / reject
 CORRECTABLE = (*OPEN, Status.INVALID)          # an invalid record can be fixed, or rejected
-EDITABLE = ("beneficiary_id", "wallet", "amount", "batch_id", "created_at")
+EDITABLE = ("beneficiary_id", "wallet", "amount", "batch_id", "payout_slot", "created_at")
 
 
 def decide(conn: sqlite3.Connection, ref: str, approve: bool, reviewer: str,
@@ -21,8 +21,11 @@ def decide(conn: sqlite3.Connection, ref: str, approve: bool, reviewer: str,
     if row["status"] not in allowed:
         raise ValueError(f"{ref} is {row['status']}; can't {'approve' if approve else 'reject'} it")
     status = Status.APPROVED if approve else Status.REJECTED
-    conn.execute("UPDATE requests SET status = ?, reviewer = ?, note = ?, updated_at = ?"
-                 " WHERE request_ref = ?", (status, reviewer, note, db.now(), ref))
+    updated = conn.execute("UPDATE requests SET status = ?, reviewer = ?, note = ?, updated_at = ?"
+                           " WHERE request_ref = ? AND status = ? AND updated_at = ?",
+                           (status, reviewer, note, db.now(), ref, row["status"], row["updated_at"]))
+    if updated.rowcount != 1:
+        raise ValueError(f"{ref} changed during review; reload it before deciding")
     db.log(conn, ref, status.lower(), {"reviewer": reviewer, "note": note})
     conn.commit()
     return db.get(conn, ref)
@@ -56,6 +59,8 @@ def correct(conn: sqlite3.Connection, ref: str, changes: dict, reviewer: str,
     changes = {k: str(v).strip() for k, v in changes.items() if k in EDITABLE and v is not None}
     if "beneficiary_id" in changes:  # staff type the real ID; only its token is stored
         changes["beneficiary_id"] = identity.pseudonymize(changes["beneficiary_id"])
+    if "payout_slot" in changes:
+        changes["payout_slot"] = changes["payout_slot"].lower() or config.DEFAULT_PAYOUT_SLOT
     changes = {k: v for k, v in changes.items() if v != (row[k] or "")}
     if not changes:
         raise ValueError("nothing to change")
@@ -67,14 +72,16 @@ def correct(conn: sqlite3.Connection, ref: str, changes: dict, reviewer: str,
         changes["amount"] = ingest.normalize_amount(changes["amount"])
     if "created_at" in changes:
         changes["created_at"] = ingest.parse_time(changes["created_at"])
-    # An INVALID record that now passes validation joins the normal flow.
+    sets = ", ".join(f"{k} = ?" for k in changes)
+    updated = conn.execute(f"UPDATE requests SET {sets}, status = ?, flags = '[]', risk_score = NULL,"
+                           " reviewer = ?, note = ?, updated_at = ?"
+                           " WHERE request_ref = ? AND status = ? AND updated_at = ?",
+                           (*changes.values(), Status.PENDING_REVIEW, reviewer, note, db.now(),
+                            ref, row["status"], row["updated_at"]))
+    if updated.rowcount != 1:
+        raise ValueError(f"{ref} changed during review; reload it before correcting")
     if row["status"] == Status.INVALID:
         db.log(conn, ref, "validated", {"reviewer": reviewer})
-
-    sets = ", ".join(f"{k} = ?" for k in changes)
-    conn.execute(f"UPDATE requests SET {sets}, status = ?, flags = '[]', risk_score = NULL,"
-                 " reviewer = ?, note = ?, updated_at = ? WHERE request_ref = ?",
-                 (*changes.values(), Status.PENDING_REVIEW, reviewer, note, db.now(), ref))
     db.log(conn, ref, "corrected", {"reviewer": reviewer, "note": note,
                                     "changes": {k: [row[k], v] for k, v in changes.items()}})
     dedup.flag_duplicates(conn, [ref])
@@ -86,14 +93,19 @@ def correct(conn: sqlite3.Connection, ref: str, changes: dict, reviewer: str,
 def approve_clean(conn: sqlite3.Connection, reviewer: str) -> list[str]:
     """Bulk-approve every pending request that has no flags. Flagged ones stay for a human."""
     refs = [r["request_ref"] for r in conn.execute(
-        "SELECT request_ref FROM requests WHERE status = ? AND flags = '[]'",
-        (Status.PENDING_REVIEW,))]
+        "SELECT request_ref FROM requests WHERE status = ? AND flags = '[]' AND payout_slot = ?",
+        (Status.PENDING_REVIEW, config.DEFAULT_PAYOUT_SLOT))]
+    approved = []
     for ref in refs:
-        conn.execute("UPDATE requests SET status = ?, reviewer = ?, updated_at = ?"
-                     " WHERE request_ref = ?", (Status.APPROVED, reviewer, db.now(), ref))
-        db.log(conn, ref, "approved", {"reviewer": reviewer, "bulk": True})
+        updated = conn.execute("UPDATE requests SET status = ?, reviewer = ?, updated_at = ?"
+                               " WHERE request_ref = ? AND status = ? AND flags = '[]' AND payout_slot = ?",
+                               (Status.APPROVED, reviewer, db.now(), ref, Status.PENDING_REVIEW,
+                                config.DEFAULT_PAYOUT_SLOT))
+        if updated.rowcount == 1:
+            approved.append(ref)
+            db.log(conn, ref, "approved", {"reviewer": reviewer, "bulk": True})
     conn.commit()
-    return refs
+    return approved
 
 
 def retry(conn: sqlite3.Connection, ref: str, reviewer: str) -> dict:
@@ -104,8 +116,8 @@ def retry(conn: sqlite3.Connection, ref: str, reviewer: str) -> dict:
     if row["status"] != Status.FAILED:
         raise ValueError(f"{ref} is {row['status']}, only FAILED can be retried")
     if row.get("registry_status") == "BLOCKED":
-        raise ValueError(f"{ref} was refused by the on-chain registry: this person already has a "
-                         f"payout in batch {row['batch_id']}; retrying would be refused again")
+        raise ValueError(f"{ref} was refused by the on-chain registry: payout slot "
+                         f"{row['payout_slot']} in batch {row['batch_id']} is already taken")
     conn.execute("UPDATE requests SET status = ?, tx_hash = NULL, method = NULL, error = NULL,"
                  " submitted_at = NULL, updated_at = ? WHERE request_ref = ?",
                  (Status.APPROVED, db.now(), ref))

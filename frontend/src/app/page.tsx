@@ -88,7 +88,7 @@ export default function Overview() {
               {summary?.registry.enabled && (
                 <div className="mt-4 border-t border-stone-100 pt-3 text-sm">
                   <div className="font-medium text-stone-900">On-chain payout registry</div>
-                  <p className="mt-0.5 text-xs text-stone-500">One payout per person per batch, enforced by a Soroban contract. Stores hashes only.</p>
+                  <p className="mt-0.5 text-xs text-stone-500">Blocks repeat payments in the same payout slot.</p>
                   <div className="mt-2 flex gap-4 text-xs">
                     <span><b className="tabular-nums text-emerald-700">{summary.registry.PAID ?? 0}</b> paid</span>
                     <span><b className="tabular-nums text-rose-700">{summary.registry.BLOCKED ?? 0}</b> blocked</span>

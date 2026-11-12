@@ -30,10 +30,13 @@ INACTIVE = (Status.REJECTED, Status.INVALID)
 PAID = (Status.CONFIRMED, Status.CLAIMED)
 
 
-SCHEMA = """
+PAYOUT_SLOT_COLUMN = f"TEXT NOT NULL DEFAULT '{config.DEFAULT_PAYOUT_SLOT}'"
+
+SCHEMA = f"""
 CREATE TABLE IF NOT EXISTS requests (
     request_ref    TEXT PRIMARY KEY,
     batch_id       TEXT,
+    payout_slot    {PAYOUT_SLOT_COLUMN},
     beneficiary_id TEXT NOT NULL,
     wallet         TEXT NOT NULL,
     amount         TEXT NOT NULL,      -- 7-decimal string, same format as Horizon
@@ -74,7 +77,8 @@ CREATE TABLE IF NOT EXISTS events (
 
 
 # Columns added after the first release: added to existing databases on connect.
-MIGRATIONS = {"batch_id": "TEXT", "recon_status": "TEXT", "recon_reasons": "TEXT", "recon_at": "TEXT",
+MIGRATIONS = {"batch_id": "TEXT", "payout_slot": PAYOUT_SLOT_COLUMN,
+              "recon_status": "TEXT", "recon_reasons": "TEXT", "recon_at": "TEXT",
               "registry_key": "TEXT", "registry_status": "TEXT",
               "balance_id": "TEXT", "claim_status": "TEXT", "claimed_at": "TEXT"}
 # Status values renamed to match the design doc's state machine.
@@ -91,9 +95,13 @@ def connect() -> sqlite3.Connection:
     conn.row_factory = sqlite3.Row
     existing = {r["name"] for r in conn.execute("PRAGMA table_info(requests)")}
     if existing:
-        for col, typ in MIGRATIONS.items():
-            if col not in existing:
-                conn.execute(f"ALTER TABLE requests ADD COLUMN {col} {typ}")
+        if MIGRATIONS.keys() - existing:
+            # A second request may be migrating the database at the same time.
+            conn.execute("BEGIN IMMEDIATE")
+            existing = {r["name"] for r in conn.execute("PRAGMA table_info(requests)")}
+            for col, typ in MIGRATIONS.items():
+                if col not in existing:
+                    conn.execute(f"ALTER TABLE requests ADD COLUMN {col} {typ}")
         for old, new in RENAMED.items():
             conn.execute("UPDATE requests SET status = ? WHERE status = ?", (new, old))
         conn.commit()
