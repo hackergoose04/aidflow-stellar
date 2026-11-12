@@ -62,7 +62,8 @@ Details: [contracts/README.md](contracts/README.md).
 ```bash
 python scripts/reset_demo.py        # back up the database, start fresh with the sample batch
 python scripts/make_demo_csv.py     # small live batch paying your own Testnet accounts
-python scripts/claim_demo.py        # a beneficiary claims a claimable balance -> CLAIMED
+python scripts/beneficiary_claim.py # after paying demo_live.csv: BEN-CAROL claims her money -> CLAIMED
+python scripts/claim_demo.py        # self-contained CLAIMED demo on a throwaway database
 ```
 
 `.env` holds two HMAC secrets: `REGISTRY_SECRET` (on-chain registry keys) and `PII_HMAC_SECRET`

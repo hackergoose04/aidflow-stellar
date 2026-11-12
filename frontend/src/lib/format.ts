@@ -15,17 +15,17 @@ export const shortKey = (key: string | null, n = 4) =>
 
 export const pct = (x: number) => `${Math.round(x * 100)}%`;
 
-export const STATUS_STYLE: Record<Status, { label: string; className: string }> = {
-  INVALID: { label: "Invalid", className: "bg-red-50 text-red-800 ring-red-200" },
-  PENDING_REVIEW: { label: "Pending review", className: "bg-amber-50 text-amber-800 ring-amber-200" },
-  HELD: { label: "Held", className: "bg-slate-100 text-slate-700 ring-slate-300" },
-  APPROVED: { label: "Approved", className: "bg-sky-50 text-sky-800 ring-sky-200" },
-  REJECTED: { label: "Rejected", className: "bg-stone-100 text-stone-600 ring-stone-200" },
-  SUBMITTED: { label: "Submitted", className: "bg-indigo-50 text-indigo-800 ring-indigo-200" },
-  CONFIRMED: { label: "Confirmed", className: "bg-emerald-50 text-emerald-800 ring-emerald-200" },
-  CLAIMED: { label: "Claimed", className: "bg-teal-50 text-teal-800 ring-teal-300" },
-  FAILED: { label: "Failed", className: "bg-rose-50 text-rose-800 ring-rose-200" },
-  UNKNOWN: { label: "Unknown", className: "bg-orange-50 text-orange-800 ring-orange-200" },
+export const STATUS_STYLE: Record<Status, { label: string; dot: string }> = {
+  INVALID: { label: "Invalid", dot: "#dc2626" },
+  PENDING_REVIEW: { label: "Pending review", dot: "#d97706" },
+  HELD: { label: "Held", dot: "#71717a" },
+  APPROVED: { label: "Approved", dot: "#2b59c3" },
+  REJECTED: { label: "Rejected", dot: "#d4d4d8" },
+  SUBMITTED: { label: "Submitted", dot: "#7c8cf8" },
+  CONFIRMED: { label: "Confirmed", dot: "#16a34a" },
+  CLAIMED: { label: "Claimed", dot: "#0d7a5f" },
+  FAILED: { label: "Failed", dot: "#e11d48" },
+  UNKNOWN: { label: "Unknown", dot: "#ea580c" },
 };
 
 export interface FlagInfo {
@@ -61,14 +61,14 @@ export function describeFlag(flag: string): FlagInfo {
   }
 }
 
-export const RECON_STYLE: Record<ReconCategory, { label: string; className: string; color: string; why: string }> = {
-  MATCHED: { label: "Matched", className: "bg-emerald-50 text-emerald-800 ring-emerald-200", color: "#059669",
+export const RECON_STYLE: Record<ReconCategory, { label: string; color: string; why: string }> = {
+  MATCHED: { label: "Matched", color: "#16a34a",
     why: "Confirmed on chain once, with the expected amount, wallet and asset." },
-  PENDING_VERIFICATION: { label: "Pending verification", className: "bg-indigo-50 text-indigo-800 ring-indigo-200", color: "#6366f1",
+  PENDING_VERIFICATION: { label: "Pending verification", color: "#7c8cf8",
     why: "Submitted, but the final on-chain outcome isn't established yet." },
-  MISMATCH: { label: "Mismatch", className: "bg-rose-50 text-rose-800 ring-rose-200", color: "#e11d48",
+  MISMATCH: { label: "Mismatch", color: "#e11d48",
     why: "Our record and the chain disagree. Needs a person." },
-  NOT_EXECUTED: { label: "Not executed", className: "bg-stone-100 text-stone-700 ring-stone-200", color: "#a8a29e",
+  NOT_EXECUTED: { label: "Not executed", color: "#d4d4d8",
     why: "Invalid, held, rejected, not yet paid, or failed, and nothing was sent." },
 };
 
@@ -98,22 +98,22 @@ const REASON_TEXT: Record<string, string> = {
 export const describeReason = (r: string) =>
   REASON_TEXT[r] ?? (/^paid_(\d+)_times$/.test(r) ? `Paid ${r.split("_")[1]} times` : r.replaceAll("_", " "));
 
-export const REGISTRY_STYLE: Record<string, { label: string; className: string; why: string }> = {
-  RESERVED: { label: "Reserved", className: "bg-indigo-50 text-indigo-800 ring-indigo-200",
+export const REGISTRY_STYLE: Record<string, { label: string; dot: string; why: string }> = {
+  RESERVED: { label: "Reserved", dot: "#7c8cf8",
     why: "Registered on chain before paying; waiting for the payment result." },
-  PAID: { label: "Paid on chain", className: "bg-emerald-50 text-emerald-800 ring-emerald-200",
+  PAID: { label: "Paid on chain", dot: "#16a34a",
     why: "The registry records this payout as made, with its transaction." },
-  RELEASED: { label: "Released", className: "bg-stone-100 text-stone-700 ring-stone-200",
+  RELEASED: { label: "Released", dot: "#a1a1aa",
     why: "The payment failed, so the reservation was freed for a retry." },
-  BLOCKED: { label: "Blocked on chain", className: "bg-rose-50 text-rose-800 ring-rose-200",
+  BLOCKED: { label: "Blocked on chain", dot: "#e11d48",
     why: "The registry already holds a payout in this person's slot for the batch." },
 };
 
-export const CLAIM_STYLE: Record<string, { label: string; className: string; why: string }> = {
-  UNCLAIMED: { label: "Waiting for claim", className: "bg-amber-50 text-amber-800 ring-amber-200",
+export const CLAIM_STYLE: Record<string, { label: string; dot: string; why: string }> = {
+  UNCLAIMED: { label: "Waiting for claim", dot: "#d97706",
     why: "Sent as a claimable balance; the beneficiary hasn't picked it up yet." },
-  CLAIMED: { label: "Received", className: "bg-teal-50 text-teal-800 ring-teal-300",
+  CLAIMED: { label: "Received", dot: "#0d7a5f",
     why: "The beneficiary claimed the money into their wallet." },
-  RECLAIMED: { label: "Returned to NGO", className: "bg-stone-100 text-stone-700 ring-stone-200",
+  RECLAIMED: { label: "Returned to NGO", dot: "#a1a1aa",
     why: "Not claimed in time; the NGO took the money back." },
 };

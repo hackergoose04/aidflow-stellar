@@ -1,4 +1,18 @@
 export const API_URL = process.env.NEXT_PUBLIC_API_URL ?? "http://127.0.0.1:8000";
+export const HORIZON_URL = process.env.NEXT_PUBLIC_HORIZON_URL ?? "https://horizon-testnet.stellar.org";
+
+/** Does this address exist on Stellar? Accounts that were never funded don't (stellar.expert can't show them). */
+export async function accountState(address: string): Promise<"exists" | "missing" | "invalid" | null> {
+  try {
+    const res = await fetch(`${HORIZON_URL}/accounts/${address}`);
+    if (res.ok) return "exists";
+    if (res.status === 404) return "missing";
+    if (res.status === 400) return "invalid";
+    return null;
+  } catch {
+    return null; // offline: just show the link
+  }
+}
 
 export type Status =
   | "INVALID"

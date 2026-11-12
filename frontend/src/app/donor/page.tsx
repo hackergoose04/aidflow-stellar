@@ -4,22 +4,18 @@ import { Suspense, useCallback, useEffect, useState } from "react";
 import { useSearchParams } from "next/navigation";
 import { get, type PublicBatch, type PublicPayment, type PublicSummary } from "@/lib/api";
 import { formatAmount, formatTime, pct, shortKey } from "@/lib/format";
-import { Button, Card, ErrorNote } from "@/components/ui";
+import { Badge, Button, Card, Empty, ErrorNote } from "@/components/ui";
 
-const STATUS_TONE: Record<string, string> = {
-  Received: "bg-teal-50 text-teal-800 ring-teal-300",
-  Paid: "bg-emerald-50 text-emerald-800 ring-emerald-200",
-  "In progress": "bg-indigo-50 text-indigo-800 ring-indigo-200",
-  "Under review": "bg-amber-50 text-amber-800 ring-amber-200",
-  "Not paid": "bg-stone-100 text-stone-600 ring-stone-200",
+const STATUS_DOT: Record<string, string> = {
+  Received: "#0d7a5f",
+  Paid: "#16a34a",
+  "In progress": "#7c8cf8",
+  "Under review": "#d97706",
+  "Not paid": "#d4d4d8",
 };
 
 function PublicBadge({ status }: { status: string }) {
-  return (
-    <span className={`inline-flex whitespace-nowrap rounded-full px-2 py-0.5 text-xs font-medium ring-1 ring-inset ${STATUS_TONE[status] ?? ""}`}>
-      {status}
-    </span>
-  );
+  return <Badge label={status} dot={STATUS_DOT[status]} />;
 }
 
 async function sha256Hex(text: string): Promise<string> {
@@ -103,67 +99,68 @@ function DonorView() {
   const t = summary?.totals;
   return (
     <>
-      <div className="mb-6">
-        <div className="mb-2 flex flex-wrap items-center gap-2">
-          <span className="rounded-full bg-teal-50 px-2 py-0.5 text-xs font-medium text-teal-800 ring-1 ring-teal-200">Public · for donors</span>
-          {summary && <span className="text-xs text-stone-500">{summary.program} · {summary.network}</span>}
+      <section className="mb-10">
+        <div className="mb-3 flex flex-wrap items-center gap-2 text-[12px] text-zinc-500">
+          <span className="rounded-full border border-zinc-200 px-2 py-0.5 font-medium text-zinc-700">Public report</span>
+          {summary && <span>{summary.program} · {summary.network}</span>}
         </div>
-        <h1 className="text-2xl font-semibold tracking-tight text-stone-900">Where the aid went</h1>
-        <p className="mt-1 max-w-2xl text-sm text-stone-500">
-          Every payout is a public Stellar transaction. This page shows amounts and outcomes only, never who received
-          them. You can check any payment yourself: your browser reads it straight from Stellar.
+        <h1 className="max-w-2xl text-[34px] font-semibold leading-[1.15] tracking-[-0.02em] text-zinc-900 sm:text-[40px]">
+          Where the aid went
+        </h1>
+        <p className="mt-3 max-w-xl text-[15px] leading-relaxed text-zinc-500">
+          Every payout is a public Stellar transaction. This page shows amounts and outcomes, never who received them,
+          and you can check any payment yourself: your browser reads it straight from the chain.
         </p>
-      </div>
+      </section>
       <ErrorNote error={error} />
 
       {t && summary && (
-        <div className="mb-6 grid grid-cols-2 gap-3 md:grid-cols-4">
-          <Tile value={`${formatAmount(t.amount_paid)} ${summary.asset}`} label="Paid out" />
-          <Tile value={`${t.paid} / ${t.requests}`} label="Requests paid" />
-          <Tile value={t.paid ? pct(t.received / t.paid) : "—"} label="Reached the beneficiary's wallet" />
-          <Tile value={t.paid ? pct(t.reconciled / t.paid) : "—"} label="Matched to our records on chain" />
+        <div className="mb-12 grid grid-cols-2 gap-x-6 gap-y-8 border-y border-zinc-100 py-8 md:grid-cols-4">
+          <Figure value={formatAmount(t.amount_paid)} unit={summary.asset} label="Paid out" />
+          <Figure value={`${t.paid}`} unit={`of ${t.requests}`} label="Requests paid" />
+          <Figure value={t.paid ? pct(t.received / t.paid) : "—"} label="Reached the beneficiary's wallet" />
+          <Figure value={t.paid ? pct(t.reconciled / t.paid) : "—"} label="Matched to records on chain" />
         </div>
       )}
 
-      <div className="grid gap-4 md:grid-cols-5">
-        <Card title="Check a payment" className="md:col-span-2">
+      <div className="grid items-start gap-6 lg:grid-cols-5">
+        <Card title="Verify a payment" className="lg:col-span-2">
           <form onSubmit={(e) => { e.preventDefault(); lookup(ref); }} className="flex gap-2">
-            <input value={ref} onChange={(e) => setRef(e.target.value)} placeholder="Payment reference, e.g. LIVE-…-1"
-              className="min-w-0 flex-1 rounded-lg border border-stone-300 px-3 py-1.5 font-mono text-sm focus:border-teal-600 focus:outline-none" />
-            <Button disabled={busy || !ref.trim()}>{busy ? "Checking…" : "Check"}</Button>
+            <input value={ref} onChange={(e) => setRef(e.target.value)} placeholder="Payment reference"
+              className="input h-9 min-w-0 flex-1 font-mono" />
+            <Button className="h-9" disabled={busy || !ref.trim()}>{busy ? "Checking…" : "Verify"}</Button>
           </form>
+          {!payment && <p className="mt-3 text-[12px] text-zinc-500">Pick a batch on the right, or paste a reference from a receipt.</p>}
           {payment && (
-            <div className="mt-4">
-              <div className="flex items-center gap-2">
-                <span className="font-mono text-sm">{payment.request_ref}</span>
+            <div className="mt-5">
+              <div className="flex items-center justify-between gap-2">
+                <span className="font-mono text-[12px] text-zinc-500">{payment.request_ref}</span>
                 <PublicBadge status={payment.status} />
               </div>
-              <div className="mt-1 text-2xl font-semibold tabular-nums">
-                {formatAmount(payment.amount)} <span className="text-sm font-normal text-stone-500">{payment.asset}</span>
+              <div className="mt-1 text-[28px] font-semibold tracking-tight tabular-nums">
+                {formatAmount(payment.amount)} <span className="text-[13px] font-normal text-zinc-400">{payment.asset}</span>
               </div>
-              <div className="text-xs text-stone-500">
+              <div className="text-[12px] text-zinc-500">
                 Batch {payment.batch_id}{payment.paid_at && ` · paid ${formatTime(payment.paid_at)}`}
                 {payment.claimed_at && ` · received ${formatTime(payment.claimed_at)}`}
               </div>
               {checks && (
-                <ul className="mt-3 flex flex-col gap-2">
+                <ul className="mt-5 divide-y divide-zinc-100 border-y border-zinc-100">
                   {checks.map((c) => (
-                    <li key={c.label} className="flex gap-2 text-sm">
-                      <span className={c.ok === null ? "text-stone-400" : c.ok ? "text-emerald-600" : "text-rose-600"}>
-                        {c.ok === null ? "○" : c.ok ? "✓" : "✗"}
-                      </span>
-                      <div>
-                        <div className="text-stone-800">{c.label}</div>
-                        <div className="font-mono text-[11px] text-stone-500">{c.detail}</div>
+                    <li key={c.label} className="flex gap-3 py-2.5">
+                      <CheckMark ok={c.ok} />
+                      <div className="min-w-0">
+                        <div className="text-[13px] text-zinc-800">{c.label}</div>
+                        <div className="break-all font-mono text-[11px] text-zinc-400">{c.detail}</div>
                       </div>
                     </li>
                   ))}
                   {payment.registry_status === "PAID" && summary?.registry_explorer && (
-                    <li className="flex gap-2 text-sm">
-                      <span className="text-emerald-600">✓</span>
+                    <li className="flex gap-3 py-2.5">
+                      <CheckMark ok />
                       <div>
-                        <div className="text-stone-800">Recorded in the on-chain payout registry</div>
-                        <a href={summary.registry_explorer} target="_blank" rel="noreferrer" className="font-mono text-[11px] text-teal-700 hover:underline">
+                        <div className="text-[13px] text-zinc-800">Recorded in the on-chain payout registry</div>
+                        <a href={summary.registry_explorer} target="_blank" rel="noreferrer" className="link font-mono text-[11px]">
                           contract {shortKey(summary.registry_contract, 6)} ↗
                         </a>
                       </div>
@@ -172,80 +169,77 @@ function DonorView() {
                 </ul>
               )}
               {payment.explorer && (
-                <a href={payment.explorer} target="_blank" rel="noreferrer" className="mt-3 inline-block text-sm text-teal-700 hover:underline">
-                  See the transaction on stellar.expert ↗
+                <a href={payment.explorer} target="_blank" rel="noreferrer" className="link mt-4 inline-block text-[13px]">
+                  View on stellar.expert ↗
                 </a>
               )}
             </div>
           )}
         </Card>
 
-        <Card title="Payout batches" className="md:col-span-3">
+        <Card title="Payout batches" className="lg:col-span-3" flush
+          action={summary && <a href={summary.ngo_explorer} target="_blank" rel="noreferrer" className="link font-mono">NGO wallet {shortKey(summary.ngo_account, 4)} ↗</a>}>
           {summary?.batches.length ? (
             <div className="overflow-x-auto">
-              <table className="w-full min-w-[480px] text-left text-sm">
-                <thead className="text-xs text-stone-500">
+              <table className="data-table min-w-[480px]">
+                <thead>
                   <tr>
-                    <th className="py-1 font-medium">Batch</th>
-                    <th className="text-right font-medium">Requests</th>
-                    <th className="text-right font-medium">Paid</th>
-                    <th className="text-right font-medium">Received</th>
-                    <th className="text-right font-medium">Amount paid</th>
+                    <th>Batch</th>
+                    <th className="text-right">Requests</th>
+                    <th className="text-right">Paid</th>
+                    <th className="text-right">Received</th>
+                    <th className="text-right">Amount paid</th>
                   </tr>
                 </thead>
-                <tbody>
+                <tbody className="tabular-nums">
                   {summary.batches.map((b) => (
                     <tr key={b.batch_id ?? "none"} onClick={() => openBatch(b)}
-                      className={`cursor-pointer border-t border-stone-100 hover:bg-stone-50 ${batch?.id === b.batch_id ? "bg-teal-50/60" : ""}`}>
-                      <td className="whitespace-nowrap py-2 font-mono text-xs">{b.batch_id}</td>
-                      <td className="text-right tabular-nums">{b.requests}</td>
-                      <td className="text-right tabular-nums">{b.paid}</td>
-                      <td className="text-right tabular-nums">{b.received}</td>
-                      <td className="text-right tabular-nums">{formatAmount(b.amount_paid)}</td>
+                      className={`cursor-pointer transition-colors hover:bg-zinc-50 ${batch?.id === b.batch_id ? "bg-zinc-50" : ""}`}>
+                      <td className="whitespace-nowrap font-mono text-[12px] font-medium">{b.batch_id}</td>
+                      <td className="text-right">{b.requests}</td>
+                      <td className="text-right">{b.paid}</td>
+                      <td className="text-right">{b.received}</td>
+                      <td className="text-right font-medium">{formatAmount(b.amount_paid)}</td>
                     </tr>
                   ))}
                 </tbody>
               </table>
             </div>
-          ) : <p className="text-sm text-stone-500">No batches yet.</p>}
-          {summary && (
-            <p className="mt-3 text-xs text-stone-500">
-              NGO wallet{" "}
-              <a href={summary.ngo_explorer} target="_blank" rel="noreferrer" className="font-mono text-teal-700 hover:underline">{shortKey(summary.ngo_account, 6)} ↗</a>
-              {" "}· every payout leaves from here and is public on Stellar.
-            </p>
-          )}
+          ) : <Empty>No batches yet.</Empty>}
         </Card>
       </div>
 
       {batch && (
-        <Card className="mt-4" title={`Batch ${batch.id} · ${batch.rows.length} payments`}>
+        <Card className="mt-6" flush
+          title={<>Batch {batch.id} <span className="ml-1 font-normal tabular-nums text-zinc-400">{batch.rows.length}</span></>}>
           <div className="overflow-x-auto">
-            <table className="w-full min-w-[560px] text-left text-sm">
-              <thead className="text-xs text-stone-500">
+            <table className="data-table min-w-[560px]">
+              <thead>
                 <tr>
-                  <th className="py-1 font-medium">Reference</th>
-                  <th className="text-right font-medium">Amount</th>
-                  <th className="pl-6 font-medium">Status</th>
-                  <th className="font-medium">Transaction</th>
+                  <th>Reference</th>
+                  <th className="text-right">Amount</th>
+                  <th>Status</th>
+                  <th>Transaction</th>
                   <th />
                 </tr>
               </thead>
               <tbody>
                 {batch.rows.map((p) => (
-                  <tr key={p.request_ref} className="border-t border-stone-100">
-                    <td className="whitespace-nowrap py-2 font-mono text-xs">{p.request_ref}</td>
-                    <td className="text-right tabular-nums">{formatAmount(p.amount)}</td>
-                    <td className="pl-6"><PublicBadge status={p.status} /></td>
+                  <tr key={p.request_ref}>
+                    <td className="whitespace-nowrap font-mono text-[12px]">{p.request_ref}</td>
+                    <td className="text-right font-medium tabular-nums">{formatAmount(p.amount)}</td>
+                    <td><PublicBadge status={p.status} /></td>
                     <td>
                       {p.explorer
-                        ? <a href={p.explorer} target="_blank" rel="noreferrer" className="font-mono text-xs text-teal-700 hover:underline">{p.tx_hash?.slice(0, 10)}… ↗</a>
-                        : <span className="text-xs text-stone-400">—</span>}
+                        ? <a href={p.explorer} target="_blank" rel="noreferrer" className="link font-mono text-[12px]">{p.tx_hash?.slice(0, 10)}… ↗</a>
+                        : <span className="text-[12px] text-zinc-300">—</span>}
                     </td>
                     <td className="text-right">
                       {p.tx_hash && (
-                        <button onClick={() => { setRef(p.request_ref); lookup(p.request_ref); window.scrollTo({ top: 0, behavior: "smooth" }); }}
-                          className="text-xs text-teal-700 hover:underline">Check</button>
+                        <Button size="sm" variant="secondary"
+                          onClick={() => { setRef(p.request_ref); lookup(p.request_ref); window.scrollTo({ top: 0, behavior: "smooth" }); }}>
+                          Verify
+                        </Button>
                       )}
                     </td>
                   </tr>
@@ -255,22 +249,37 @@ function DonorView() {
           </div>
         </Card>
       )}
+
+      <p className="mt-12 border-t border-zinc-100 pt-6 text-[12px] text-zinc-400">
+        Beneficiaries are never named here. Amounts, timing and outcomes come from our records; every paid figure can be checked against Stellar.
+      </p>
     </>
   );
 }
 
-function Tile({ value, label }: { value: string; label: string }) {
+function Figure({ value, unit, label }: { value: string; unit?: string; label: string }) {
   return (
-    <div className="rounded-xl border border-stone-200 bg-white px-4 py-3">
-      <div className="text-2xl font-semibold tabular-nums text-stone-900">{value}</div>
-      <div className="text-xs text-stone-500">{label}</div>
+    <div>
+      <div className="text-[28px] font-semibold tracking-tight tabular-nums text-zinc-900">
+        {value}{unit && <span className="ml-1.5 text-[13px] font-normal text-zinc-400">{unit}</span>}
+      </div>
+      <div className="mt-1 text-[13px] text-zinc-500">{label}</div>
     </div>
+  );
+}
+
+function CheckMark({ ok }: { ok: boolean | null }) {
+  const tone = ok === null ? "bg-zinc-100 text-zinc-400" : ok ? "bg-emerald-50 text-emerald-600" : "bg-rose-50 text-rose-600";
+  return (
+    <span className={`mt-0.5 grid h-4 w-4 shrink-0 place-items-center rounded-full text-[10px] font-bold ${tone}`}>
+      {ok === null ? "·" : ok ? "✓" : "✕"}
+    </span>
   );
 }
 
 export default function DonorPage() {
   return (
-    <Suspense fallback={<p className="text-sm text-stone-500">Loading…</p>}>
+    <Suspense fallback={<p className="text-[13px] text-zinc-500">Loading…</p>}>
       <DonorView />
     </Suspense>
   );
