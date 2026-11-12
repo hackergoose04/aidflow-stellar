@@ -4,18 +4,16 @@ import Link from "next/link";
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
   get, payAll, post, uploadCsv,
-  type ClaimResult, type Delivery, type DeliveryCost, type MlMetrics, type ReconEval, type Summary, type UploadReport, type VerifyResult, type Wallet,
+  type ClaimResult, type Delivery, type DeliveryCost, type Summary, type UploadReport, type VerifyResult, type Wallet,
 } from "@/lib/api";
-import { formatAmount, formatDuration, formatHours, pct, shortKey } from "@/lib/format";
+import { formatAmount, formatDuration, formatHours, shortKey } from "@/lib/format";
 import { Button, Card, ErrorNote, Notice, PageHeader, ReviewerInput, Stats, useReviewer } from "@/components/ui";
-import { BatchBars, RiskHistogram, StatusBreakdown } from "@/components/Charts";
+import { StatusBreakdown } from "@/components/Charts";
 
 export default function Overview() {
   const [summary, setSummary] = useState<Summary | null>(null);
   const [wallet, setWallet] = useState<Wallet | null>(null);
   const [walletError, setWalletError] = useState<string | null>(null);
-  const [metrics, setMetrics] = useState<MlMetrics | null>(null);
-  const [reconEval, setReconEval] = useState<ReconEval | null>(null);
   const [delivery, setDelivery] = useState<Delivery | null>(null);
   const [cost, setCost] = useState<DeliveryCost | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -34,8 +32,6 @@ export default function Overview() {
       setError((e as Error).message);
     }
     get<Wallet>("/wallet").then(setWallet, (e) => setWalletError((e as Error).message));
-    get<MlMetrics>("/ml/metrics").then(setMetrics, () => setMetrics(null));
-    get<ReconEval>("/eval/recon").then(setReconEval, () => setReconEval(null));
     get<Delivery>("/delivery").then(setDelivery, () => setDelivery(null));
     get<DeliveryCost>("/delivery/cost").then(setCost, () => setCost(null));
   }, []);
@@ -133,15 +129,9 @@ export default function Overview() {
       {delivery && (delivery.timing.approved_to_chain.n > 0 || delivery.unclaimed.length > 0) && <LastMile d={delivery} cost={cost} />}
 
       <div className="mb-6 grid items-start gap-6 lg:grid-cols-3">
-        <div className="flex min-w-0 flex-col gap-6 lg:col-span-2">
-          <Card title="Requests by status" action={`${total} total`}>
-            {s && <StatusBreakdown counts={s} />}
-          </Card>
-          <Card title="AI risk distribution"
-            action={<Link href="/requests" className="link">Review threshold {metrics?.threshold ?? 0.9} →</Link>}>
-            {summary && <RiskHistogram bins={summary.risk_histogram} threshold={metrics?.threshold ?? 0.9} />}
-          </Card>
-        </div>
+        <Card title="Requests by status" action={<Link href="/evaluation" className="link">Charts and model evaluation →</Link>} className="lg:col-span-2">
+          {s && <StatusBreakdown counts={s} />}
+        </Card>
         <Card title="Accounts on Stellar">
           {wallet ? (
             <dl className="flex flex-col gap-4 text-[13px]">
@@ -179,14 +169,6 @@ export default function Overview() {
           )}
         </Card>
       </div>
-
-      {summary && summary.batches.length > 0 && (
-        <Card title="Batches" className="mb-6">
-          <BatchBars batches={summary.batches} />
-        </Card>
-      )}
-
-      {metrics && <Evaluation m={metrics} recon={reconEval} />}
     </>
   );
 }
@@ -209,81 +191,102 @@ function Step({ n, title, count, caption, alert = false, children }: {
 /** The Problem Space goal: shorten "decided to pay" -> "money in hand", and treat arrival as the start. */
 function LastMile({ d, cost }: { d: Delivery; cost: DeliveryCost | null }) {
   const t = d.timing;
-  const overdue = d.unclaimed.filter((u) => u.overdue).length;
-  const scale = Math.max(cost?.benchmark ?? 0.064, cost?.cost_share ?? 0);
-  const bars: [string, number | undefined, string][] = [
-    ["AidFlow", cost?.cost_share, "bg-emerald-500"],
-    ["UN target", cost?.target, "bg-zinc-300"],
-    ["Global average", cost?.benchmark, "bg-zinc-300"],
+  const legs = t.legs;
+  // Sequential blue, light -> dark along the journey (validated with the dataviz palette script).
+  const journey = legs ? [
+    { label: "Approval → sent", value: legs.approve_to_send, color: "#60a5fa" },
+    { label: "Sent → final on chain", value: legs.send_to_chain, color: "#2563eb" },
+    { label: "On chain → in hand", value: legs.chain_to_hand, color: "#1e3a8a" },
+  ] : [];
+  const bench = [
+    { label: "Global average", value: cost?.benchmark ?? 0.064, emphasis: false },
+    { label: "UN target", value: cost?.target ?? 0.03, emphasis: false },
+    { label: "AidFlow", value: cost?.cost_share ?? 0, emphasis: true },
   ];
+  const arr = d.arrival;
+  const overdue = arr?.overdue ?? d.unclaimed.filter((u) => u.overdue).length;
+  // Status hues: good / warning / serious, plus a neutral for money that came back.
+  const where = arr ? [
+    { label: "In the beneficiary's hands", value: arr.in_hand, color: "#15803d" },
+    { label: `Waiting to be claimed`, value: arr.waiting, color: "#f59e0b" },
+    { label: `Waiting over ${formatHours(d.alert_hours)}`, value: arr.overdue, color: "#e11d48" },
+    { label: "Returned to the NGO", value: arr.returned, color: "#71717a" },
+  ] : [];
+
   return (
     <Card title="From decision to money in hand" action={<Link href="/payouts" className="link">Payouts →</Link>} flush className="mb-6">
-      <div className="grid lg:grid-cols-3">
-        <section className="border-zinc-100 px-5 py-4 max-lg:border-b">
-          <div className="text-[12px] text-zinc-500">Approval → money in hand</div>
-          <div className="mt-1 text-[26px] font-semibold tracking-tight tabular-nums text-zinc-900">
-            {t.approved_to_hand.n ? formatDuration(t.approved_to_hand.median_s) : "—"}
-          </div>
-          <div className="text-[12px] text-zinc-500">
-            {t.approved_to_hand.n
-              ? <>median of {t.approved_to_hand.n} payouts{t.approved_to_hand.max_s !== null && ` · slowest ${formatDuration(t.approved_to_hand.max_s)}`}</>
-              : `nothing received yet · ${t.not_in_hand_yet} sent, waiting to be claimed`}
-          </div>
-          <dl className="mt-4 divide-y divide-zinc-100 border-t border-zinc-100 text-[13px]">
-            <div className="flex justify-between py-2"><dt className="text-zinc-500">Sent → final on chain</dt><dd className="font-medium tabular-nums">{formatDuration(t.submitted_to_chain.median_s)}</dd></div>
-            <div className="flex justify-between py-2"><dt className="text-zinc-500">Approval → on chain</dt><dd className="font-medium tabular-nums">{formatDuration(t.approved_to_chain.median_s)}</dd></div>
-            <div className="flex justify-between py-2"><dt className="text-zinc-500">Typical aid disbursement</dt><dd className="text-zinc-500">weeks</dd></div>
-          </dl>
-        </section>
+      <div className="grid sm:grid-cols-3">
+        <Panel label="Approval → money in hand" value={t.approved_to_hand.n ? formatDuration(t.approved_to_hand.median_s) : "—"}
+          line={t.approved_to_hand.n ? `median of ${t.approved_to_hand.n} payouts · typical aid disbursement: weeks` : `${t.not_in_hand_yet} sent, waiting to be claimed`}>
+          {journey.some((l) => l.value !== null) && (
+            <Split parts={journey.map((l) => ({ ...l, value: l.value ?? 0 }))} format={(v) => formatDuration(v)} />
+          )}
+        </Panel>
 
-        <section className="border-zinc-100 px-5 py-4 max-lg:border-b lg:border-l">
-          <div className="text-[12px] text-zinc-500">Network cost per payout</div>
+        <Panel label="Network cost per payout" value={cost?.payouts ? `${((cost.cost_share ?? 0) * 100).toFixed(2)}%` : "—"}
+          line={cost?.payouts ? `of the amount delivered · ≈ $${(cost.avg_fee_usd ?? 0).toFixed(3)} each` : cost ? "No payouts yet" : "Reading fees from Stellar…"}>
           {cost?.payouts ? (
-            <>
-              <div className="mt-1 text-[26px] font-semibold tracking-tight tabular-nums text-zinc-900">
-                {((cost.cost_share ?? 0) * 100).toFixed(2)}%
-              </div>
-              <div className="text-[12px] text-zinc-500">of the amount delivered · ≈ ${(cost.avg_fee_usd ?? 0).toFixed(3)} each</div>
-              <ul className="mt-4 flex flex-col gap-2 text-[12px]">
-                {bars.map(([label, v, color]) => (
-                  <li key={label} className="grid grid-cols-[6.5rem_1fr_2.75rem] items-center gap-2">
-                    <span className="text-zinc-500">{label}</span>
-                    <span className="h-1.5 rounded-full bg-zinc-100">
-                      <span className={`block h-full rounded-full ${color}`} style={{ width: `${((v ?? 0) / scale) * 100}%`, minWidth: 3 }} />
-                    </span>
-                    <span className="text-right font-medium tabular-nums">{((v ?? 0) * 100).toFixed(label === "AidFlow" ? 2 : 1)}%</span>
-                  </li>
-                ))}
-              </ul>
-              <p className="mt-3 text-[11px] leading-relaxed text-zinc-400">
-                Fees actually charged: payment {cost.avg_payment_fee_xlm?.toFixed(5)} XLM + registry {cost.avg_registry_fee_xlm?.toFixed(3)} XLM,
-                at an assumed ${cost.xlm_usd?.toFixed(2)}/XLM. Excludes cash-out at an agent.
-              </p>
-            </>
-          ) : <p className="mt-2 text-[13px] text-zinc-500">{cost ? "No payouts yet." : "Reading fees from Stellar…"}</p>}
-        </section>
-
-        <section className="border-zinc-100 px-5 py-4 lg:border-l">
-          <div className="text-[12px] text-zinc-500">Last mile · sent but not yet received</div>
-          <div className={`mt-1 text-[26px] font-semibold tracking-tight tabular-nums ${overdue ? "text-rose-600" : "text-zinc-900"}`}>{d.unclaimed.length}</div>
-          <div className="text-[12px] text-zinc-500">
-            {overdue ? `${overdue} waiting over ${formatHours(d.alert_hours)}: follow up` : `none waiting over ${formatHours(d.alert_hours)}`}
-          </div>
-          {d.unclaimed.length > 0 ? (
-            <ul className="mt-4 divide-y divide-zinc-100 border-t border-zinc-100 text-[13px]">
-              {d.unclaimed.slice(0, 3).map((u) => (
-                <li key={u.request_ref} className="flex items-center justify-between gap-2 py-2">
-                  <Link href={`/requests/${encodeURIComponent(u.request_ref)}`} className="truncate font-mono text-[12px] hover:underline">{u.request_ref}</Link>
-                  <span className="shrink-0 tabular-nums text-zinc-500">{formatAmount(u.amount)}</span>
-                  <span className={`shrink-0 text-[12px] tabular-nums ${u.overdue ? "font-medium text-rose-600" : "text-zinc-500"}`}>{formatHours(u.waiting_hours)}</span>
+            <ul className="mt-4 flex flex-col gap-2.5">
+              {bench.map((b) => (
+                <li key={b.label} className="grid grid-cols-[6.5rem_1fr_3rem] items-center gap-2 text-[12px]" title={`${b.label}: ${(b.value * 100).toFixed(2)}% of the amount`}>
+                  <span className={b.emphasis ? "font-medium text-zinc-900" : "text-zinc-500"}>{b.label}</span>
+                  <span className="h-2 overflow-hidden rounded-full bg-zinc-100">
+                    <span className="block h-full rounded-full" style={{
+                      width: `${(b.value / Math.max(...bench.map((x) => x.value))) * 100}%`, minWidth: 4,
+                      background: b.emphasis ? "#2563eb" : "#d4d4d8",
+                    }} />
+                  </span>
+                  <span className={`text-right tabular-nums ${b.emphasis ? "font-medium text-zinc-900" : "text-zinc-500"}`}>{(b.value * 100).toFixed(b.emphasis ? 2 : 1)}%</span>
                 </li>
               ))}
             </ul>
-          ) : <p className="mt-4 border-t border-zinc-100 pt-3 text-[13px] text-zinc-500">Everything sent has been received.</p>}
-          <p className="mt-3 text-[11px] leading-relaxed text-zinc-400">Arrival is the start: unclaimed money is tracked, and the NGO can reclaim it after 30 days.</p>
-        </section>
+          ) : null}
+        </Panel>
+
+        <Panel label="Sent, not yet received" value={d.unclaimed.length} tone={overdue ? "text-rose-600" : undefined}
+          line={overdue ? `${overdue} waiting over ${formatHours(d.alert_hours)}: follow up` : `none waiting over ${formatHours(d.alert_hours)} · unclaimed money returns after 30 days`}>
+          {arr && where.some((w) => w.value > 0) && <Split parts={where} format={(v) => String(v)} />}
+        </Panel>
       </div>
     </Card>
+  );
+}
+
+function Panel({ label, value, line, tone, children }: {
+  label: string; value: React.ReactNode; line: string; tone?: string; children?: React.ReactNode;
+}) {
+  return (
+    <div className="border-zinc-100 px-5 py-4 max-sm:border-t max-sm:first:border-t-0 sm:border-l sm:first:border-l-0">
+      <div className="text-[12px] text-zinc-500">{label}</div>
+      <div className={`mt-1 text-[26px] font-semibold leading-none tracking-tight ${tone ?? "text-zinc-900"}`}>{value}</div>
+      <div className="mt-2 text-[12px] text-zinc-500">{line}</div>
+      {children}
+    </div>
+  );
+}
+
+/** One whole split into parts: a thin segmented bar, figures listed beside it (never on the bar). */
+function Split({ parts, format }: { parts: { label: string; value: number; color: string }[]; format: (v: number) => string }) {
+  const total = parts.reduce((n, p) => n + p.value, 0) || 1;
+  return (
+    <div className="mt-4">
+      <div className="flex h-2 gap-[2px] overflow-hidden rounded-full" role="img"
+        aria-label={parts.map((p) => `${p.label}: ${format(p.value)}`).join(", ")}>
+        {parts.filter((p) => p.value > 0).map((p) => (
+          <span key={p.label} title={`${p.label}: ${format(p.value)}`}
+            style={{ flexGrow: p.value / total, flexBasis: 0, minWidth: 4, background: p.color }} />
+        ))}
+      </div>
+      <ul className="mt-2.5 flex flex-col gap-1 text-[12px]">
+        {parts.map((p) => (
+          <li key={p.label} className={`flex items-center gap-2 ${p.value ? "" : "opacity-40"}`}>
+            <span className="h-2 w-2 shrink-0 rounded-[2px]" style={{ background: p.color }} />
+            <span className="flex-1 truncate text-zinc-500">{p.label}</span>
+            <span className="tabular-nums font-medium text-zinc-900">{format(p.value)}</span>
+          </li>
+        ))}
+      </ul>
+    </div>
   );
 }
 
@@ -308,99 +311,5 @@ function UploadResult({ report }: { report: UploadReport }) {
         </div>
       ) : <div className="px-5 py-3 text-[13px] text-zinc-500">Every row passed validation.</div>}
     </Card>
-  );
-}
-
-function Evaluation({ m, recon }: { m: MlMetrics; recon: ReconEval | null }) {
-  const rows: [string, string, typeof m.ml][] = [
-    ["All manual review", "baseline", m.manual_all],
-    ["Rules only", "", m.rules],
-    ["AI model only", "", m.ml],
-    ["Rules + AI", "live", m.rules_or_ml],
-  ];
-  const types = Object.keys(m.ml.recall_by_type);
-  return (
-    <>
-      <div className="mb-3 mt-10 flex items-baseline justify-between gap-4">
-        <h2 className="text-[15px] font-semibold text-zinc-900">Evaluation</h2>
-        <span className="text-[12px] text-zinc-500">{m.test_rows.toLocaleString()} simulated requests · {m.anomalies} injected anomalies</span>
-      </div>
-      <div className="grid gap-6 lg:grid-cols-3">
-        <Card className="lg:col-span-2" title="Less manual review, same anomalies caught" flush>
-          <div className="overflow-x-auto">
-            <table className="data-table min-w-[560px]">
-              <thead>
-                <tr>
-                  <th>Approach</th>
-                  <th className="text-right">Sent to review</th>
-                  <th className="text-right">Workload saved</th>
-                  <th className="text-right">Caught</th>
-                  <th className="text-right">Precision</th>
-                  <th className="text-right">False positives</th>
-                </tr>
-              </thead>
-              <tbody className="tabular-nums">
-                {rows.map(([name, tag, r]) => (
-                  <tr key={name} className={tag === "live" ? "bg-zinc-50/80" : ""}>
-                    <td className="font-medium text-zinc-900">
-                      {name}
-                      {tag && <span className={`ml-2 rounded px-1.5 py-px text-[10px] font-medium uppercase tracking-wide ${tag === "live" ? "bg-zinc-900 text-white" : "bg-zinc-100 text-zinc-500"}`}>{tag}</span>}
-                    </td>
-                    <td className="text-right">{pct(r.review_share)}</td>
-                    <td className={`text-right font-medium ${tag === "live" ? "text-emerald-600" : "text-zinc-900"}`}>{100 - Math.round(r.review_share * 100)}%</td>
-                    <td className="text-right">{pct(r.recall)}</td>
-                    <td className="text-right">{pct(r.precision)}</td>
-                    <td className="text-right">{pct(r.false_positive_rate)}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-          <details className="border-t border-zinc-100 text-[13px]">
-            <summary className="cursor-pointer px-5 py-2.5 text-[12px] text-zinc-500 hover:text-zinc-900">Caught by anomaly type</summary>
-            <div className="overflow-x-auto">
-              <table className="data-table">
-                <thead>
-                  <tr><th>Approach</th>{types.map((t) => <th key={t} className="text-right capitalize">{t.replaceAll("_", " ")}</th>)}</tr>
-                </thead>
-                <tbody className="tabular-nums">
-                  {rows.slice(1).map(([name, , r]) => (
-                    <tr key={name}>
-                      <td>{name}</td>
-                      {types.map((t) => (
-                        <td key={t} className={`text-right ${r.recall_by_type[t] < 0.5 ? "text-rose-600" : r.recall_by_type[t] >= 0.9 ? "text-zinc-900" : "text-zinc-500"}`}>
-                          {pct(r.recall_by_type[t])}
-                        </td>
-                      ))}
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          </details>
-          <p className="border-t border-zinc-100 px-5 py-3 text-[12px] leading-relaxed text-zinc-500">
-            Simulated data shows the workflow works, not real-world accuracy. On labelled PaySim fraud the model,
-            refit on its own history, finds about half the fraud in the top 10% it ranks.
-          </p>
-        </Card>
-
-        <Card title="Reconciliation accuracy">
-          {recon ? (
-            <>
-              <div className="text-[40px] font-semibold leading-none tracking-tight tabular-nums text-zinc-900">{pct(recon.category_accuracy)}</div>
-              <p className="mt-2 text-[13px] text-zinc-500">of {recon.records.toLocaleString()} records put in the right category</p>
-              <dl className="mt-5 flex flex-col divide-y divide-zinc-100 border-y border-zinc-100 text-[13px]">
-                <div className="flex justify-between py-2"><dt className="text-zinc-500">Exact reason given</dt><dd className="tabular-nums font-medium">{pct(recon.reason_accuracy)}</dd></div>
-                <div className="flex justify-between py-2"><dt className="text-zinc-500">Stray payouts found</dt><dd className="tabular-nums font-medium">{recon.strays_found} / {recon.stray_payouts}</dd></div>
-                <div className="flex justify-between py-2"><dt className="text-zinc-500">Discrepancy kinds</dt><dd className="tabular-nums font-medium">{Object.keys(recon.by_scenario).length}</dd></div>
-              </dl>
-              <p className="mt-3 text-[12px] text-zinc-400">{recon.note}</p>
-            </>
-          ) : (
-            <p className="text-[13px] text-zinc-500">Run <code className="font-mono text-[12px]">python scripts/recon_eval.py</code>.</p>
-          )}
-        </Card>
-      </div>
-    </>
   );
 }

@@ -97,15 +97,8 @@ function RequestsTable() {
 
   return (
     <>
-      <PageHeader title="Requests" subtitle="Triage incoming aid requests, review risk signals and track payment progress." />
+      <PageHeader title="Requests" subtitle="Every request the system has seen, with flags, AI risk and payout status." />
       <ErrorNote error={error} />
-
-      <section aria-label="Request overview" className="mb-6 grid grid-cols-2 gap-3 xl:grid-cols-4">
-        <OverviewCard label="Total requests" value={rows?.length ?? "—"} hint="All received requests" />
-        <OverviewCard label="Needs attention" value={groupCounts.attention ?? "—"} hint="Review or investigate" tone="text-amber-700" />
-        <OverviewCard label="Flagged" value={rows?.filter((r) => r.flags.length > 0).length ?? "—"} hint="At least one risk signal" tone="text-rose-700" />
-        <OverviewCard label="Approved" value={rows?.filter((r) => r.status === "APPROVED").length ?? "—"} hint="Awaiting payout" tone="text-blue-700" />
-      </section>
 
       <nav aria-label="Request workflow filters" className="dock-strip mb-5 flex gap-1 overflow-x-auto border-b border-zinc-200">
         <Tab active={!status && !group} onClick={() => setView({})}>
@@ -158,6 +151,11 @@ function RequestsTable() {
               <option value="risk_score">Highest AI risk</option>
               <option value="amount">Largest amount</option>
             </select>
+            <form onSubmit={(e) => { e.preventDefault(); lookup(); }} className="flex items-center gap-1"
+              title="The real ID is hashed on the server to find this person's token. It is not stored.">
+              <input value={realId} onChange={(e) => setRealId(e.target.value)} placeholder="Real beneficiary ID" className="input w-44" />
+              <Button size="sm" variant="ghost" disabled={!realId.trim()}>Find</Button>
+            </form>
             <button type="button" role="switch" aria-checked={onlyFlagged} onClick={() => setOnlyFlagged((value) => !value)}
               className={`ml-auto inline-flex h-8 items-center gap-2 rounded-md px-2.5 text-[13px] transition-colors ${
                 onlyFlagged ? "bg-zinc-900 text-white" : "text-zinc-600 hover:bg-zinc-100"
@@ -169,20 +167,6 @@ function RequestsTable() {
             </button>
           </div>
 
-          <details className="group mt-3 border-t border-zinc-100 pt-3">
-            <summary className="w-fit cursor-pointer select-none text-[12px] font-medium text-zinc-500 marker:text-zinc-400 hover:text-zinc-900">
-              Advanced filters
-            </summary>
-            <form onSubmit={(e) => { e.preventDefault(); lookup(); }} className="mt-3 flex flex-wrap items-end gap-2"
-              title="The real ID is hashed on the server to find this person's token. It is not stored.">
-              <label className="grid gap-1 text-[11px] text-zinc-500">
-                Search by real beneficiary ID
-                <input value={realId} onChange={(e) => setRealId(e.target.value)} placeholder="Enter beneficiary ID" className="input w-56" />
-              </label>
-              <Button size="sm" variant="secondary" disabled={!realId.trim()}>Find beneficiary</Button>
-              <span className="text-[11px] text-zinc-400">ID is hashed for lookup and not stored.</span>
-            </form>
-          </details>
         </div>
 
         {rows === null && !error ? (
@@ -195,7 +179,7 @@ function RequestsTable() {
           } />
         ) : rows && rows.length > 0 ? (
           <div className="overflow-x-auto">
-            <table className="data-table min-w-[1180px]">
+            <table className="data-table min-w-[1000px]">
               <thead>
                 <tr>
                   <th>Request</th>
@@ -203,8 +187,7 @@ function RequestsTable() {
                   <th className="text-right">Amount</th>
                   <th>AI risk</th>
                   <th>Flags</th>
-                  <th>Request status</th>
-                  <th>Payout status</th>
+                  <th>Status</th>
                   <th>Submitted</th>
                   <th><span className="sr-only">Action</span></th>
                 </tr>
@@ -223,7 +206,6 @@ function RequestsTable() {
                     <td><RiskLevel score={r.risk_score} /></td>
                     <td className="max-w-[220px]"><FlagChips flags={r.flags} /></td>
                     <td className="whitespace-nowrap"><StatusBadge status={r.status} /></td>
-                    <td><PayoutStatus status={r.status} /></td>
                     <td className="whitespace-nowrap text-[12px] text-zinc-500">{formatTime(r.created_at)}</td>
                     <td className="whitespace-nowrap text-right">
                       <Link href={`/requests/${encodeURIComponent(r.request_ref)}`}
@@ -239,21 +221,6 @@ function RequestsTable() {
         ) : null}
       </Card>
     </>
-  );
-}
-
-function OverviewCard({ label, value, hint, tone = "text-zinc-900" }: {
-  label: string;
-  value: number | string;
-  hint: string;
-  tone?: string;
-}) {
-  return (
-    <div className="rounded-lg border border-zinc-200 bg-white px-4 py-3.5 shadow-[0_1px_2px_rgba(0,0,0,0.03)]">
-      <div className="text-[11px] font-medium uppercase tracking-[0.06em] text-zinc-500">{label}</div>
-      <div className={`mt-1 text-[23px] font-semibold tracking-tight tabular-nums ${tone}`}>{value}</div>
-      <div className="mt-0.5 text-[12px] text-zinc-400">{hint}</div>
-    </div>
   );
 }
 
@@ -282,20 +249,6 @@ function RiskLevel({ score }: { score: number | null }) {
       <span>{level}</span>
     </span>
   );
-}
-
-function PayoutStatus({ status }: { status: Status }) {
-  const state: Partial<Record<Status, { label: string; style: string }>> = {
-    APPROVED: { label: "Not paid", style: "text-blue-700" },
-    SUBMITTED: { label: "Submitted", style: "text-indigo-700" },
-    CONFIRMED: { label: "Confirmed", style: "text-emerald-700" },
-    CLAIMED: { label: "Claimed", style: "text-emerald-700" },
-    FAILED: { label: "Failed", style: "text-rose-700" },
-    UNKNOWN: { label: "Unclear", style: "text-amber-700" },
-  };
-  const payout = state[status];
-  if (!payout) return <span className="text-[12px] text-zinc-300">—</span>;
-  return <span className={`whitespace-nowrap text-[12px] font-medium ${payout.style}`}>{payout.label}</span>;
 }
 
 function EmptyState({ title, description, action }: { title: string; description: string; action?: React.ReactNode }) {

@@ -98,8 +98,12 @@ export interface Delivery {
     approved_to_hand: DurationStats;
     submitted_to_chain: DurationStats;
     not_in_hand_yet: number;
+    /** median seconds per leg of the journey */
+    legs?: { approve_to_send: number | null; send_to_chain: number | null; chain_to_hand: number | null };
   };
   unclaimed: Unclaimed[];
+  /** where every paid-out amount is now */
+  arrival?: { in_hand: number; waiting: number; overdue: number; returned: number };
   alert_hours: number;
 }
 

@@ -112,7 +112,7 @@ def summary(conn: sqlite3.Connection = Depends(get_conn)) -> dict:
 def delivery_metrics(conn: sqlite3.Connection = Depends(get_conn)) -> dict:
     """Decision -> money in hand, and payouts still waiting for the beneficiary (last mile)."""
     return {"timing": delivery.timing(conn), "unclaimed": delivery.unclaimed(conn),
-            "alert_hours": config.CLAIM_ALERT_HOURS}
+            "arrival": delivery.arrival(conn), "alert_hours": config.CLAIM_ALERT_HOURS}
 
 
 @app.get("/delivery/cost")
