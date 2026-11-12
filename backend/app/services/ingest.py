@@ -104,7 +104,10 @@ def ingest_csv(conn: sqlite3.Connection, text: str) -> dict:
         accepted.append(ref)
 
     for r in rejected:
-        db.log(conn, r["request_ref"], "invalid_at_upload" if r["stored_as_invalid"] else "rejected_at_upload", r)
+        # A re-uploaded ref is logged on the existing request as a duplicate, not as a rejection of it.
+        kind = ("invalid_at_upload" if r["stored_as_invalid"]
+                else "duplicate_upload" if "duplicate_ref" in r["reasons"] else "rejected_at_upload")
+        db.log(conn, r["request_ref"], kind, r)
     dedup.flag_duplicates(conn, accepted)
     screening.screen(conn, accepted)
     conn.commit()

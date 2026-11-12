@@ -9,7 +9,9 @@ funded Testnet account, so every link opens on stellar.expert:
   * BEN-ALICE asks twice in the batch -> flagged; if approved anyway, the on-chain
     registry refuses the second payout
 
-  python scripts/make_demo_csv.py
+  python scripts/make_demo_csv.py                 # BEN-CAROL = a fresh account whose keys we keep
+  python scripts/make_demo_csv.py --carol G...    # BEN-CAROL = your own wallet (e.g. Freighter on
+                                                  # Testnet), so you claim it yourself on /claim
 """
 from __future__ import annotations
 
@@ -53,7 +55,8 @@ def main() -> None:
     t = int(time.time())
     batch = f"LIVE-{datetime.now(timezone.utc):%Y%m%d-%H%M}"
     now = datetime.now(timezone.utc).replace(microsecond=0)
-    b1, b2, carol = config.public("BEN1"), config.public("BEN2"), fresh_carol()
+    own = sys.argv[sys.argv.index("--carol") + 1] if "--carol" in sys.argv else None
+    b1, b2, carol = config.public("BEN1"), config.public("BEN2"), own or fresh_carol()
     rows = [
         (f"LIVE-{t}-1", "BEN-ALICE", b1, "20", now),
         (f"LIVE-{t}-2", "BEN-BOB", b2, "35", now + timedelta(minutes=3)),
@@ -64,9 +67,12 @@ def main() -> None:
     lines += [f"{r},{batch},{b},{w},{a},AIDUSD,{c.isoformat()}" for r, b, w, a, c in rows]
     OUT.write_text("\n".join(lines) + "\n")
     print(f"wrote {OUT.relative_to(ROOT)}: batch {batch}, 4 requests (BEN-ALICE twice)")
-    print(f"BEN-CAROL is a new funded account without a trustline: "
-          f"https://stellar.expert/explorer/testnet/account/{carol}")
-    print("after paying, let her claim:  python scripts/beneficiary_claim.py")
+    if own:
+        print(f"BEN-CAROL is your wallet {carol}: after paying, open http://localhost:3000/claim and claim it there")
+    else:
+        print(f"BEN-CAROL is a new funded account without a trustline: "
+              f"https://stellar.expert/explorer/testnet/account/{carol}")
+        print("after paying, let her claim:  python scripts/beneficiary_claim.py")
 
 
 if __name__ == "__main__":

@@ -267,7 +267,7 @@ export function useReviewer(): [string, (v: string) => void] {
 export function ReviewerInput({ value, onChange, compact = false }: { value: string; onChange: (v: string) => void; compact?: boolean }) {
   return (
     <label className={`flex items-center gap-2 text-[13px] text-zinc-500 ${compact ? "md:hidden" : ""}`}>
-      Reviewer
+      Reviewing as
       <input value={value} onChange={(e) => onChange(e.target.value)} placeholder="Your name" className="input w-36" />
     </label>
   );

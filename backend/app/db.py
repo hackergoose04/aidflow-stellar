@@ -85,19 +85,29 @@ def now() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
+_migrated: set[str] = set()  # DB paths already migrated by this process
+
+
 def connect() -> sqlite3.Connection:
     config.DB_PATH.parent.mkdir(parents=True, exist_ok=True)
-    conn = sqlite3.connect(config.DB_PATH, check_same_thread=False)
+    # Every request opens its own connection, and the UI fires several at once. WAL lets readers
+    # and writers proceed together; the busy timeout covers the brief moments they can't.
+    conn = sqlite3.connect(config.DB_PATH, check_same_thread=False, timeout=10)
     conn.row_factory = sqlite3.Row
-    existing = {r["name"] for r in conn.execute("PRAGMA table_info(requests)")}
-    if existing:
-        for col, typ in MIGRATIONS.items():
-            if col not in existing:
-                conn.execute(f"ALTER TABLE requests ADD COLUMN {col} {typ}")
-        for old, new in RENAMED.items():
-            conn.execute("UPDATE requests SET status = ? WHERE status = ?", (new, old))
-        conn.commit()
-    conn.executescript(SCHEMA)
+    conn.execute("PRAGMA journal_mode=WAL")
+    conn.execute("PRAGMA busy_timeout=10000")
+    key = str(config.DB_PATH)
+    if key not in _migrated:
+        existing = {r["name"] for r in conn.execute("PRAGMA table_info(requests)")}
+        if existing:
+            for col, typ in MIGRATIONS.items():
+                if col not in existing:
+                    conn.execute(f"ALTER TABLE requests ADD COLUMN {col} {typ}")
+            for old, new in RENAMED.items():
+                conn.execute("UPDATE requests SET status = ? WHERE status = ?", (new, old))
+            conn.commit()
+        conn.executescript(SCHEMA)
+        _migrated.add(key)
     return conn
 
 

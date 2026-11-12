@@ -15,6 +15,42 @@ from .. import db, registry, soroban, stellar_client as sc
 from ..db import Status
 
 
+def repair_registry(conn: sqlite3.Connection) -> list[str]:
+    """Bring local registry state back in line with the chain after an interruption.
+
+    If the backend stops between a confirmed payment and the mark_paid write, the chain can say
+    Paid while the database still says RESERVED. Sync it, or mark it paid if that never ran."""
+    fixed = []
+    rows = conn.execute("SELECT request_ref FROM requests WHERE status IN (?, ?) AND registry_status = 'RESERVED'"
+                        " AND registry_key IS NOT NULL", (Status.CONFIRMED, Status.CLAIMED)).fetchall()
+    for r in rows:
+        ref = r["request_ref"]
+        row = db.get(conn, ref)
+        try:
+            entry = registry.get(bytes.fromhex(row["registry_key"]))
+        except Exception:
+            continue  # registry unreachable: try next time
+        if entry and entry["status"] == "Paid" and entry["request_hash"] == sc.memo_hash(ref):
+            conn.execute("UPDATE requests SET registry_status = 'PAID', updated_at = ? WHERE request_ref = ?",
+                         (db.now(), ref))
+            db.log(conn, ref, "registry_paid", {"tx_hash": None, "synced_from_chain": True})
+        else:
+            settle_registry(conn, ref, Status.CONFIRMED)
+        conn.commit()
+        fixed.append(ref)
+    return fixed
+
+
+def _paid_on_chain_already(ref: str) -> str | None:
+    """Tx hash of a successful payout carrying this request's memo, if the chain has one."""
+    from .recon import fetch_chain_payouts  # local import: recon imports nothing from here
+    memo = sc.memo_hash(ref).hex()
+    for op in fetch_chain_payouts(sc.distribution_keypair().public_key):
+        if op["memo_hex"] == memo:
+            return op["tx_hash"]
+    return None
+
+
 def settle_registry(conn: sqlite3.Connection, ref: str, status: str) -> None:
     """After a payment's outcome is known, record it in the on-chain registry."""
     row = db.get(conn, ref)
@@ -72,17 +108,30 @@ def _reserve(conn: sqlite3.Connection, row: dict) -> dict | None:
     conn.execute("UPDATE requests SET registry_status = 'RESERVED' WHERE request_ref = ?", (ref,))
     if detail:
         db.log(conn, ref, "registry_reserved", {"tx_hash": detail})
+    elif (tx := _paid_on_chain_already(ref)):
+        # The registry already held our reservation, yet locally this row is APPROVED: the database
+        # lost the earlier submit (e.g. a reset mid-flight). The chain remembers; don't pay twice.
+        conn.execute("UPDATE requests SET status = ?, tx_hash = ?, submitted_at = ?, error = ?, updated_at = ?"
+                     " WHERE request_ref = ?", (Status.SUBMITTED, tx, db.now(),
+                                                "earlier payout found on chain; verifying", db.now(), ref))
+        db.log(conn, ref, "found_on_chain", {"tx_hash": tx})
+        conn.commit()
+        return {"request_ref": ref, "status": "SUBMITTED", "error": "earlier payout found on chain; run Verify",
+                "tx_hash": tx}
     conn.commit()
     return None
 
 
-def run(conn: sqlite3.Connection, limit: int = 20) -> list[dict]:
+def run(conn: sqlite3.Connection, limit: int = 20, batch: str | None = None) -> list[dict]:
+    """Pay up to `limit` APPROVED requests, oldest first; `batch` restricts to one disbursement batch."""
     dist, asset = sc.distribution_keypair(), sc.aid_asset()
     server = sc.horizon()
     use_registry = registry.enabled()
-    refs = [r["request_ref"] for r in conn.execute(
-        "SELECT request_ref FROM requests WHERE status = ? ORDER BY created_at LIMIT ?",
-        (Status.APPROVED, limit))]
+    sql, args = "SELECT request_ref FROM requests WHERE status = ?", [Status.APPROVED]
+    if batch:
+        sql += " AND batch_id = ?"
+        args.append(batch)
+    refs = [r["request_ref"] for r in conn.execute(sql + " ORDER BY created_at LIMIT ?", (*args, limit)).fetchall()]
 
     results = []
     for ref in refs:

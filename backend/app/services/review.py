@@ -56,17 +56,17 @@ def correct(conn: sqlite3.Connection, ref: str, changes: dict, reviewer: str,
     changes = {k: str(v).strip() for k, v in changes.items() if k in EDITABLE and v is not None}
     if "beneficiary_id" in changes:  # staff type the real ID; only its token is stored
         changes["beneficiary_id"] = identity.pseudonymize(changes["beneficiary_id"])
-    changes = {k: v for k, v in changes.items() if v != (row[k] or "")}
-    if not changes:
-        raise ValueError("nothing to change")
-    merged = {**row, **changes}
-    errors = ingest.validate(merged)
+    errors = ingest.validate({**row, **changes})
     if errors:
         raise ValueError(f"invalid correction: {', '.join(errors)}")
+    # Compare in stored form, so "150" against "150.0000000" is not a change.
     if "amount" in changes:
         changes["amount"] = ingest.normalize_amount(changes["amount"])
     if "created_at" in changes:
         changes["created_at"] = ingest.parse_time(changes["created_at"])
+    changes = {k: v for k, v in changes.items() if v != (row[k] or "")}
+    if not changes:
+        raise ValueError("nothing to change")
     # An INVALID record that now passes validation joins the normal flow.
     if row["status"] == Status.INVALID:
         db.log(conn, ref, "validated", {"reviewer": reviewer})

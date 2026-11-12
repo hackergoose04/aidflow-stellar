@@ -6,7 +6,7 @@ from datetime import datetime, timedelta, timezone
 
 from .. import config, db, stellar_client as sc
 from ..db import Status
-from .executor import settle_registry
+from .executor import repair_registry, settle_registry
 
 
 def run(conn: sqlite3.Connection) -> list[dict]:
@@ -37,4 +37,6 @@ def run(conn: sqlite3.Connection) -> list[dict]:
             settle_registry(conn, ref, new_status)  # mark PAID, or release so it can be retried
         results.append({"request_ref": ref, "chain": result, "status": new_status or "unchanged"})
     conn.commit()
+    for ref in repair_registry(conn):
+        results.append({"request_ref": ref, "chain": "registry", "status": "registry synced"})
     return results
