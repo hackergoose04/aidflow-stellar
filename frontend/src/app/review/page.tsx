@@ -5,7 +5,7 @@ import { useCallback, useEffect, useState } from "react";
 import { get, post, type AidRequest } from "@/lib/api";
 import { formatAmount, formatTime, shortKey } from "@/lib/format";
 import {
-  Button, Card, ErrorNote, FlagChips, PageHeader, ReviewerInput, RiskBar, StatusBadge, useReviewer,
+  Button, Card, Empty, ErrorNote, FlagChips, Notice, PageHeader, ReviewerInput, RiskBar, StatusBadge, useReviewer,
 } from "@/components/ui";
 
 export default function ReviewQueue() {
@@ -71,45 +71,44 @@ export default function ReviewQueue() {
   return (
     <>
       <PageHeader title="Review queue"
-        subtitle="No money moves until a person approves. Approve, hold for checks, correct, or reject. Flagged requests are sorted by AI risk, highest first."
-        action={<ReviewerInput value={reviewer} onChange={setReviewer} />} />
+        subtitle="No money moves until a person approves. Flagged requests are sorted by AI risk, highest first."
+        action={<ReviewerInput value={reviewer} onChange={setReviewer} compact />} />
       <ErrorNote error={error} />
-      {noReviewer && (
-        <p className="mb-4 rounded-lg bg-amber-50 px-4 py-2 text-sm text-amber-900">Enter your name as reviewer to approve, hold or reject.</p>
-      )}
+      {noReviewer && <Notice tone="warning">Enter your name under <b className="font-medium">Reviewing as</b> to approve, hold or reject.</Notice>}
 
-      {items === null && !error && <p className="text-sm text-stone-500">Loading…</p>}
+      {items === null && !error && <p className="text-[13px] text-zinc-500">Loading…</p>}
       {items?.length === 0 && (
-        <Card><p className="text-sm text-stone-500">Nothing waiting for review. Upload requests on the <Link className="text-teal-700 underline" href="/">overview</Link>.</p></Card>
+        <Card flush><Empty>Nothing waiting for review. Upload requests on the <Link className="link" href="/">overview</Link>.</Empty></Card>
       )}
 
       {clean.length > 0 && (
-        <Card className="mb-6" title={`${clean.length} requests with no flags`}
-          action={<Button disabled={noReviewer || busy === "clean"} onClick={approveClean}>Approve all {clean.length}</Button>}>
-          <p className="text-sm text-stone-500">Passed every rule and the AI model scored them as usual.</p>
-        </Card>
+        <div className="mb-6 flex flex-wrap items-center justify-between gap-3 rounded-lg border border-zinc-200 bg-white px-5 py-3.5 shadow-[0_1px_2px_rgba(0,0,0,0.03)]">
+          <div>
+            <div className="text-[13px] font-semibold text-zinc-900">{clean.length} requests with no flags</div>
+            <div className="text-[12px] text-zinc-500">Passed every rule and the AI model scored them as usual.</div>
+          </div>
+          <Button disabled={noReviewer || busy === "clean"} onClick={approveClean}>Approve all {clean.length}</Button>
+        </div>
       )}
 
-      {([["invalid · correct or reject", invalid], ["held", held], ["flagged · decide one by one", flagged]] as const).map(([title, list]) =>
+      {([["Invalid", "correct or reject", invalid], ["Held", "waiting for checks", held], ["Flagged", "decide one by one", flagged]] as const).map(([title, hint, list]) =>
         list.length > 0 && (
-          <section key={title} className="mb-6">
-            <h2 className="mb-3 text-sm font-semibold uppercase tracking-wide text-stone-500">
-              {list.length} {title}
-            </h2>
-            <div className="flex flex-col gap-3">
+          <Card key={title} className="mb-6" flush
+            title={<>{title} <span className="ml-1 font-normal tabular-nums text-zinc-400">{list.length}</span></>} action={hint}>
+            <div className="divide-y divide-zinc-100">
               {list.map((r) => (
-                <ReviewCard key={r.request_ref} r={r} note={notes[r.request_ref] ?? ""}
+                <ReviewRow key={r.request_ref} r={r} note={notes[r.request_ref] ?? ""}
                   setNote={(v) => setNotes({ ...notes, [r.request_ref]: v })}
                   disabled={noReviewer || busy === r.request_ref} decide={decide} />
               ))}
             </div>
-          </section>
+          </Card>
         ))}
     </>
   );
 }
 
-function ReviewCard({ r, note, setNote, disabled, decide }: {
+function ReviewRow({ r, note, setNote, disabled, decide }: {
   r: AidRequest;
   note: string;
   setNote: (v: string) => void;
@@ -118,39 +117,41 @@ function ReviewCard({ r, note, setNote, disabled, decide }: {
 }) {
   const href = `/requests/${encodeURIComponent(r.request_ref)}`;
   return (
-          <div className="grid gap-4 rounded-xl border border-stone-200 bg-white p-4 md:grid-cols-[1fr_1.3fr_auto]">
-            <div className="min-w-0">
-              <div className="flex items-center gap-2">
-                <Link href={href} className="font-mono text-sm font-medium text-stone-900 hover:underline">{r.request_ref}</Link>
-                {(r.status === "HELD" || r.status === "INVALID") && <StatusBadge status={r.status} />}
-              </div>
-              <div className="mt-1 text-2xl font-semibold tabular-nums text-stone-900">
-                {formatAmount(r.amount)} <span className="text-sm font-normal text-stone-500">{r.asset}</span>
-              </div>
-              <dl className="mt-2 grid grid-cols-[auto_1fr] gap-x-3 gap-y-0.5 text-xs text-stone-500">
-                <dt>Beneficiary</dt><dd className="text-stone-800">{r.beneficiary_id}</dd>
-                <dt>Batch</dt><dd className="text-stone-800">{r.batch_id ?? "—"}</dd>
-                <dt>Wallet</dt><dd className="font-mono text-stone-800">{shortKey(r.wallet, 6)}</dd>
-                <dt>Requested</dt><dd className="text-stone-800">{formatTime(r.created_at)}</dd>
-                <dt>AI risk</dt><dd><RiskBar score={r.risk_score} /></dd>
-              </dl>
-            </div>
-            <FlagChips flags={r.flags} verbose />
-            <div className="flex flex-col gap-2 md:w-48">
-              {r.status === "HELD" && r.note && <p className="text-xs text-stone-500">Held: “{r.note}”</p>}
-              <input placeholder="Note (optional)" value={note} onChange={(e) => setNote(e.target.value)}
-                className="rounded-lg border border-stone-300 px-2 py-1 text-sm focus:border-teal-600 focus:outline-none" />
-              {r.status !== "INVALID" && (
-                <Button disabled={disabled} onClick={() => decide(r.request_ref, "approve")}>Approve</Button>
-              )}
-              <div className="flex gap-2">
-                {r.status === "PENDING_REVIEW" && (
-                  <Button className="flex-1" variant="secondary" disabled={disabled} onClick={() => decide(r.request_ref, "hold")}>Hold</Button>
-                )}
-                <Button className="flex-1" variant="danger" disabled={disabled} onClick={() => decide(r.request_ref, "reject")}>Reject</Button>
-              </div>
-              <Link href={`${href}#correct`} className="text-center text-xs text-teal-700 hover:underline">Correct details…</Link>
-            </div>
-          </div>
+    <div className="grid gap-5 px-5 py-4 md:grid-cols-[minmax(0,1fr)_minmax(0,1.2fr)_13rem]">
+      <div className="min-w-0">
+        <div className="flex items-center gap-2">
+          <Link href={href} className="font-mono text-[12px] font-medium text-zinc-900 hover:underline">{r.request_ref}</Link>
+          {(r.status === "HELD" || r.status === "INVALID") && <StatusBadge status={r.status} />}
+        </div>
+        <div className="mt-1 text-[20px] font-semibold tracking-tight tabular-nums text-zinc-900">
+          {formatAmount(r.amount)} <span className="text-[12px] font-normal text-zinc-400">{r.asset}</span>
+        </div>
+        <dl className="mt-2 grid grid-cols-[5.5rem_1fr] gap-y-1 text-[12px]">
+          <dt className="text-zinc-400">Beneficiary</dt><dd className="truncate font-mono text-zinc-700">{r.beneficiary_id}</dd>
+          <dt className="text-zinc-400">Batch</dt><dd className="text-zinc-700">{r.batch_id ?? "—"}</dd>
+          <dt className="text-zinc-400">Wallet</dt><dd className="font-mono text-zinc-700">{shortKey(r.wallet, 6)}</dd>
+          <dt className="text-zinc-400">Requested</dt><dd className="text-zinc-700">{formatTime(r.created_at)}</dd>
+          <dt className="text-zinc-400">AI risk</dt><dd><RiskBar score={r.risk_score} /></dd>
+        </dl>
+      </div>
+      <div className="min-w-0 md:border-l md:border-zinc-100 md:pl-5">
+        <div className="eyebrow mb-2">Why it&apos;s here</div>
+        <FlagChips flags={r.flags} verbose />
+      </div>
+      <div className="flex flex-col gap-2">
+        {r.status === "HELD" && r.note && <p className="text-[12px] text-zinc-500">Held: “{r.note}”</p>}
+        <input placeholder="Note (optional)" value={note} onChange={(e) => setNote(e.target.value)} className="input" />
+        {r.status !== "INVALID" && (
+          <Button disabled={disabled} onClick={() => decide(r.request_ref, "approve")}>Approve</Button>
+        )}
+        <div className="flex gap-2">
+          {r.status === "PENDING_REVIEW" && (
+            <Button className="flex-1" variant="secondary" disabled={disabled} onClick={() => decide(r.request_ref, "hold")}>Hold</Button>
+          )}
+          <Button className="flex-1" variant="danger" disabled={disabled} onClick={() => decide(r.request_ref, "reject")}>Reject</Button>
+        </div>
+        <Link href={`${href}#correct`} className="text-center text-[12px] text-zinc-500 hover:text-zinc-900">Correct details…</Link>
+      </div>
+    </div>
   );
 }

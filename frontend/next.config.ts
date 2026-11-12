@@ -1,7 +1,7 @@
 import type { NextConfig } from "next";
 
 const nextConfig: NextConfig = {
-  /* config options here */
+  devIndicators: false, // the floating dev badge covers the sidebar footer
 };
 
 export default nextConfig;

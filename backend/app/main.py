@@ -178,7 +178,6 @@ def approve(ref: str, body: Decision, conn: sqlite3.Connection = Depends(get_con
 
 
 @app.post("/requests/{ref}/reject")
-@app.post("/requests/{ref}/decline", include_in_schema=False)  # old name, kept for compatibility
 def reject(ref: str, body: Decision, conn: sqlite3.Connection = Depends(get_conn)) -> dict:
     return _decide(conn, ref, False, body)
 

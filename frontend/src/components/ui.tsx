@@ -1,99 +1,130 @@
 "use client";
 
+import Link from "next/link";
 import { useEffect, useState } from "react";
-import type { ReconCategory, Status } from "@/lib/api";
+import { explorerTx, type ReconCategory, type Status } from "@/lib/api";
 import { CLAIM_STYLE, describeFlag, RECON_STYLE, REGISTRY_STYLE, STATUS_STYLE } from "@/lib/format";
 
-export function ClaimBadge({ method, status }: { method: string | null; status: string | null }) {
-  if (method === "payment") return <span className="text-xs text-stone-500" title="Direct payment: in the wallet on arrival">In wallet</span>;
-  if (!status) return <span className="text-xs text-stone-400">—</span>;
-  const s = CLAIM_STYLE[status];
+/* ---------- badges: white pill, coloured dot, neutral text ---------- */
+
+export function Badge({ label, dot, title }: { label: string; dot?: string; title?: string }) {
   return (
-    <span title={s?.why} className={`inline-flex items-center whitespace-nowrap rounded-full px-2 py-0.5 text-xs font-medium ring-1 ring-inset ${s?.className ?? ""}`}>
-      {s?.label ?? status}
+    <span title={title}
+      className="inline-flex h-[22px] items-center gap-1.5 whitespace-nowrap rounded-md border border-zinc-200 bg-white px-1.5 text-[12px] font-medium text-zinc-700">
+      {dot && <span className="h-1.5 w-1.5 shrink-0 rounded-full" style={{ background: dot }} />}
+      {label}
     </span>
   );
+}
+
+const Dash = () => <span className="text-[12px] text-zinc-300">—</span>;
+
+export function StatusBadge({ status }: { status: Status }) {
+  const s = STATUS_STYLE[status];
+  return <Badge label={s.label} dot={s.dot} />;
+}
+
+export function ClaimBadge({ method, status }: { method: string | null; status: string | null }) {
+  if (method === "payment") return <span className="text-[12px] text-zinc-500" title="Direct payment: in the wallet on arrival">Payment · in wallet</span>;
+  if (!status) return <Dash />;
+  const s = CLAIM_STYLE[status];
+  return <Badge label={s?.label ?? status} dot={s?.dot} title={s?.why} />;
 }
 
 export function RegistryBadge({ status }: { status: string | null }) {
-  if (!status) return <span className="text-xs text-stone-400">—</span>;
+  if (!status) return <Dash />;
   const s = REGISTRY_STYLE[status];
-  return (
-    <span title={s?.why} className={`inline-flex items-center whitespace-nowrap rounded-full px-2 py-0.5 text-xs font-medium ring-1 ring-inset ${s?.className ?? ""}`}>
-      {s?.label ?? status}
-    </span>
-  );
+  return <Badge label={s?.label ?? status} dot={s?.dot} title={s?.why} />;
 }
 
 export function ReconBadge({ category }: { category: ReconCategory | null }) {
-  if (!category) return <span className="text-xs text-stone-400">Not reconciled</span>;
+  if (!category) return <span className="text-[12px] text-zinc-400">Not checked</span>;
   const s = RECON_STYLE[category];
-  return (
-    <span className={`inline-flex items-center whitespace-nowrap rounded-full px-2 py-0.5 text-xs font-medium ring-1 ring-inset ${s.className}`}>
-      {s.label}
-    </span>
-  );
+  return <Badge label={s.label} dot={s.color} title={s.why} />;
 }
 
-export function Card({ title, action, children, className = "" }: {
+/* ---------- layout ---------- */
+
+export function Card({ title, action, children, className = "", flush = false }: {
   title?: React.ReactNode;
   action?: React.ReactNode;
   children: React.ReactNode;
   className?: string;
+  /** Content runs edge to edge (tables). */
+  flush?: boolean;
 }) {
   return (
-    <section className={`min-w-0 rounded-xl border border-stone-200 bg-white p-5 ${className}`}>
+    <section className={`min-w-0 overflow-hidden rounded-lg border border-zinc-200 bg-white shadow-[0_1px_2px_rgba(0,0,0,0.03)] ${className}`}>
       {(title || action) && (
-        <div className="mb-4 flex items-center justify-between gap-3">
-          {title && <h2 className="text-sm font-semibold text-stone-900">{title}</h2>}
-          {action}
+        <div className="flex min-h-11 flex-wrap items-center justify-between gap-x-3 gap-y-1 border-b border-zinc-100 px-5 py-2.5">
+          {title && <h2 className="text-[13px] font-semibold text-zinc-900">{title}</h2>}
+          {action && <div className="text-[12px] text-zinc-500">{action}</div>}
         </div>
       )}
-      {children}
+      <div className={flush ? "" : "p-5"}>{children}</div>
     </section>
   );
 }
 
-export function PageHeader({ title, subtitle, action }: {
-  title: string;
-  subtitle?: string;
+export function PageHeader({ title, subtitle, action, eyebrow }: {
+  title: React.ReactNode;
+  subtitle?: React.ReactNode;
   action?: React.ReactNode;
+  eyebrow?: React.ReactNode;
 }) {
   return (
     <div className="mb-6 flex flex-wrap items-end justify-between gap-4">
-      <div>
-        <h1 className="text-2xl font-semibold tracking-tight text-stone-900">{title}</h1>
-        {subtitle && <p className="mt-1 max-w-2xl text-sm text-stone-500">{subtitle}</p>}
+      <div className="min-w-0">
+        {eyebrow && <div className="mb-1 text-[13px] text-zinc-500">{eyebrow}</div>}
+        <h1 className="text-[22px] font-semibold tracking-[-0.01em] text-zinc-900">{title}</h1>
+        {subtitle && <p className="mt-1 max-w-2xl text-[13px] leading-relaxed text-zinc-500">{subtitle}</p>}
       </div>
-      {action}
+      {action && <div className="flex flex-wrap items-center gap-2">{action}</div>}
     </div>
   );
 }
 
-export function Button({ variant = "primary", className = "", ...props }:
-  React.ButtonHTMLAttributes<HTMLButtonElement> & { variant?: "primary" | "secondary" | "danger" | "ghost" }) {
+/** A row of key numbers in one bordered strip, split by hairlines. */
+export function Stats({ items }: {
+  items: { label: string; value: React.ReactNode; hint?: React.ReactNode; href?: string; tone?: string }[];
+}) {
+  return (
+    <div className="mb-6 grid grid-cols-2 overflow-hidden rounded-lg border border-zinc-200 bg-white shadow-[0_1px_2px_rgba(0,0,0,0.03)] md:auto-cols-fr md:grid-flow-col md:grid-cols-none">
+      {items.map((it, i) => {
+        const cls = `block px-5 py-4 border-zinc-100 ${i % 2 ? "border-l" : ""} ${i > 0 ? "md:border-l" : "md:border-l-0"} ${i > 1 ? "border-t md:border-t-0" : ""} ${i === items.length - 1 && i % 2 === 0 ? "col-span-2 md:col-span-1" : ""} ${it.href ? "transition-colors hover:bg-zinc-50" : ""}`;
+        const body = (
+          <>
+            <div className="text-[12px] text-zinc-500">{it.label}</div>
+            <div className={`mt-1 text-[22px] font-semibold tracking-tight tabular-nums ${it.tone ?? "text-zinc-900"}`}>{it.value}</div>
+            {it.hint && <div className="mt-0.5 text-[12px] text-zinc-400">{it.hint}</div>}
+          </>
+        );
+        return it.href
+          ? <Link key={it.label} href={it.href} className={cls}>{body}</Link>
+          : <div key={it.label} className={cls}>{body}</div>;
+      })}
+    </div>
+  );
+}
+
+export function Button({ variant = "primary", size = "md", className = "", ...props }:
+  React.ButtonHTMLAttributes<HTMLButtonElement> & { variant?: "primary" | "secondary" | "danger" | "ghost"; size?: "sm" | "md" }) {
   const styles = {
-    primary: "bg-teal-700 text-white hover:bg-teal-800 disabled:bg-stone-300",
-    secondary: "bg-white text-stone-800 ring-1 ring-stone-300 hover:bg-stone-50 disabled:text-stone-400",
-    danger: "bg-white text-rose-700 ring-1 ring-rose-300 hover:bg-rose-50 disabled:text-stone-400",
-    ghost: "text-stone-600 hover:bg-stone-100",
+    primary: "bg-zinc-900 text-white shadow-[0_1px_2px_rgba(0,0,0,0.15)] hover:bg-zinc-800 disabled:bg-zinc-200 disabled:text-zinc-400 disabled:shadow-none",
+    secondary: "border border-zinc-200 bg-white text-zinc-800 shadow-[0_1px_2px_rgba(0,0,0,0.04)] hover:bg-zinc-50 disabled:text-zinc-400",
+    danger: "border border-zinc-200 bg-white text-rose-600 shadow-[0_1px_2px_rgba(0,0,0,0.04)] hover:border-rose-200 hover:bg-rose-50 disabled:text-zinc-400",
+    ghost: "text-zinc-600 hover:bg-zinc-100 hover:text-zinc-900",
   }[variant];
+  const sizes = { sm: "h-7 px-2.5 text-[12px]", md: "h-8 px-3 text-[13px]" }[size];
   return (
     <button
-      className={`inline-flex items-center justify-center gap-1.5 rounded-lg px-3 py-1.5 text-sm font-medium transition disabled:cursor-not-allowed ${styles} ${className}`}
+      className={`inline-flex items-center justify-center gap-1.5 whitespace-nowrap rounded-md font-medium transition-colors disabled:cursor-not-allowed ${sizes} ${styles} ${className}`}
       {...props}
     />
   );
 }
 
-export function StatusBadge({ status }: { status: Status }) {
-  const s = STATUS_STYLE[status];
-  return (
-    <span className={`inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium ring-1 ring-inset ${s.className}`}>
-      {s.label}
-    </span>
-  );
-}
+/* ---------- flags & risk ---------- */
 
 /** Same-kind flags (e.g. three "same_batch_as:…") are merged into one chip listing every value. */
 function groupFlags(flags: string[]): string[] {
@@ -108,26 +139,41 @@ function groupFlags(flags: string[]): string[] {
   return order.map((k) => (values[k].length ? `${k}:${values[k].join(", ")}` : k));
 }
 
+function Source({ ml }: { ml: boolean }) {
+  return ml
+    ? <span className="rounded-[3px] bg-zinc-900 px-1 text-[10px] font-semibold leading-[14px] text-white">AI</span>
+    : <span className="h-1.5 w-1.5 rounded-full bg-amber-500" />;
+}
+
 export function FlagChips({ flags, verbose = false }: { flags: string[]; verbose?: boolean }) {
-  if (!flags.length) return <span className="text-xs text-stone-400">No flags</span>;
+  if (!flags.length) return <span className="text-[12px] text-zinc-400">No flags</span>;
+  const groups = groupFlags(flags);
+  if (verbose) {
+    return (
+      <ul className="divide-y divide-zinc-100">
+        {groups.map((f) => {
+          const info = describeFlag(f);
+          return (
+            <li key={f} className="flex gap-3 py-2.5 first:pt-0 last:pb-0">
+              <span className="mt-1 flex h-3.5 w-5 shrink-0 items-center justify-center"><Source ml={info.source === "ml"} /></span>
+              <div className="min-w-0">
+                <div className="text-[13px] font-medium text-zinc-900">{info.label}</div>
+                <div className="break-words text-[12px] text-zinc-500">{info.detail}</div>
+              </div>
+            </li>
+          );
+        })}
+      </ul>
+    );
+  }
   return (
-    <div className={verbose ? "flex flex-col gap-2" : "flex flex-wrap gap-1"}>
-      {groupFlags(flags).map((f) => {
+    <div className="flex flex-wrap gap-1">
+      {groups.map((f) => {
         const info = describeFlag(f);
-        const tone = info.source === "ml"
-          ? "bg-violet-50 text-violet-800 ring-violet-200"
-          : "bg-amber-50 text-amber-900 ring-amber-200";
-        return verbose ? (
-          <div key={f} className={`rounded-lg px-3 py-2 ring-1 ring-inset ${tone}`}>
-            <div className="text-sm font-medium">
-              {info.label}
-              <span className="ml-2 text-xs font-normal opacity-70">{info.source === "ml" ? "AI model" : "Rule"}</span>
-            </div>
-            <div className="text-xs opacity-80">{info.detail}</div>
-          </div>
-        ) : (
+        return (
           <span key={f} title={info.detail}
-            className={`rounded-md px-1.5 py-0.5 text-xs font-medium ring-1 ring-inset ${tone}`}>
+            className="inline-flex h-[22px] items-center gap-1.5 whitespace-nowrap rounded-md bg-zinc-100 px-1.5 text-[12px] text-zinc-700">
+            <Source ml={info.source === "ml"} />
             {info.label}
           </span>
         );
@@ -137,65 +183,92 @@ export function FlagChips({ flags, verbose = false }: { flags: string[]; verbose
 }
 
 export function RiskBar({ score, threshold = 0.9 }: { score: number | null; threshold?: number }) {
-  if (score === null) return <span className="text-xs text-stone-400">—</span>;
-  const color = score >= threshold ? "bg-violet-600" : score >= 0.7 ? "bg-violet-300" : "bg-stone-300";
+  if (score === null) return <Dash />;
+  const high = score >= threshold;
   return (
     <div className="flex items-center gap-2 whitespace-nowrap" title={`Risk ${score.toFixed(3)}`}>
-      <div className="h-1.5 w-16 overflow-hidden rounded-full bg-stone-100">
-        <div className={`h-full ${color}`} style={{ width: `${Math.max(4, score * 100)}%` }} />
+      <div className="h-1 w-14 overflow-hidden rounded-full bg-zinc-100">
+        <div className={`h-full rounded-full ${high ? "bg-rose-500" : score >= 0.7 ? "bg-amber-400" : "bg-zinc-300"}`}
+          style={{ width: `${Math.max(4, score * 100)}%` }} />
       </div>
       {/* Truncate, don't round: 0.886 shows as 0.88 so it never looks above a 0.89 threshold. */}
-      <span className="w-8 text-xs tabular-nums text-stone-600">{(Math.floor(score * 100) / 100).toFixed(2)}</span>
+      <span className={`w-8 font-mono text-[12px] tabular-nums ${high ? "font-medium text-rose-600" : "text-zinc-500"}`}>
+        {(Math.floor(score * 100) / 100).toFixed(2)}
+      </span>
     </div>
   );
 }
 
+/* ---------- messages ---------- */
+
 export function ErrorNote({ error }: { error: string | null }) {
   if (!error) return null;
   return (
-    <div className="mb-4 rounded-lg border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-800">
+    <div className="mb-4 flex gap-2 rounded-md border border-rose-200 bg-rose-50/60 px-3 py-2 text-[13px] text-rose-800">
+      <span className="mt-[7px] h-1.5 w-1.5 shrink-0 rounded-full bg-rose-500" />
       {error}
     </div>
   );
 }
 
-export function TxLink({ hash, label }: { hash: string | null; label?: string }) {
-  if (!hash) return <span className="text-stone-400">—</span>;
+export function Notice({ children, tone = "neutral" }: { children: React.ReactNode; tone?: "neutral" | "success" | "warning" }) {
+  const dot = { neutral: "bg-accent", success: "bg-emerald-500", warning: "bg-amber-500" }[tone];
   return (
-    <a href={`https://stellar.expert/explorer/testnet/tx/${hash}`} target="_blank" rel="noreferrer"
-      className="font-mono text-xs text-teal-700 underline-offset-2 hover:underline">
-      {label ?? `${hash.slice(0, 8)}…`} ↗
+    <div className="mb-4 flex gap-2 rounded-md border border-zinc-200 bg-white px-3 py-2 text-[13px] text-zinc-700 shadow-[0_1px_2px_rgba(0,0,0,0.03)]">
+      <span className={`mt-[7px] h-1.5 w-1.5 shrink-0 rounded-full ${dot}`} />
+      <div>{children}</div>
+    </div>
+  );
+}
+
+export function Empty({ children }: { children: React.ReactNode }) {
+  return <div className="px-5 py-10 text-center text-[13px] text-zinc-500">{children}</div>;
+}
+
+export function TxLink({ hash, label }: { hash: string | null; label?: string }) {
+  if (!hash) return <Dash />;
+  return (
+    <a href={explorerTx(hash)} target="_blank" rel="noreferrer"
+      className="inline-flex items-center gap-0.5 break-all font-mono text-[12px] text-accent underline-offset-2 hover:underline">
+      {label ?? `${hash.slice(0, 8)}…`}<span aria-hidden className="text-zinc-400">↗</span>
     </a>
   );
 }
 
-/** Reviewer name, remembered in this browser only. */
+/* ---------- reviewer name (shared by sidebar and pages, kept in this browser) ---------- */
+
+const KEY = "aidflow.reviewer";
+const EVENT = "aidflow:reviewer";
+
 export function useReviewer(): [string, (v: string) => void] {
   const [name, setName] = useState("");
   useEffect(() => {
     try {
-      setName(localStorage.getItem("aidflow.reviewer") ?? "");
+      setName(localStorage.getItem(KEY) ?? "");
     } catch {
       /* storage unavailable */
     }
+    const sync = (e: Event) => setName((e as CustomEvent<string>).detail);
+    window.addEventListener(EVENT, sync);
+    return () => window.removeEventListener(EVENT, sync);
   }, []);
   const update = (v: string) => {
-    setName(v);
     try {
-      localStorage.setItem("aidflow.reviewer", v);
+      localStorage.setItem(KEY, v);
     } catch {
       /* storage unavailable */
     }
+    window.dispatchEvent(new CustomEvent(EVENT, { detail: v }));
   };
   return [name, update];
 }
 
-export function ReviewerInput({ value, onChange }: { value: string; onChange: (v: string) => void }) {
+/** Inline reviewer field. On wide screens the sidebar has one, so `compact` hides it there. */
+export function ReviewerInput({ value, onChange, compact = false }: { value: string; onChange: (v: string) => void; compact?: boolean }) {
   return (
-    <label className="flex items-center gap-2 text-sm text-stone-600">
+    <label className={`flex items-center gap-2 text-[13px] text-zinc-500 ${compact ? "md:hidden" : ""}`}>
       Reviewer
-      <input value={value} onChange={(e) => onChange(e.target.value)} placeholder="your name"
-        className="w-36 rounded-lg border border-stone-300 px-2 py-1 text-sm text-stone-900 focus:border-teal-600 focus:outline-none" />
+      <input value={value} onChange={(e) => onChange(e.target.value)} placeholder="Your name" className="input w-36" />
     </label>
   );
 }

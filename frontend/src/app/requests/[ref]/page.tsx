@@ -3,10 +3,10 @@
 import Link from "next/link";
 import { useParams } from "next/navigation";
 import { useCallback, useEffect, useState } from "react";
-import { explorerAccount, get, post, type AidRequest } from "@/lib/api";
+import { accountState, explorerAccount, get, post, type AidRequest } from "@/lib/api";
 import { CLAIM_STYLE, describeReason, formatAmount, formatTime, REGISTRY_STYLE } from "@/lib/format";
 import {
-  Button, Card, ClaimBadge, ErrorNote, FlagChips, ReconBadge, RegistryBadge, ReviewerInput, RiskBar, StatusBadge, TxLink,
+  Button, Card, ClaimBadge, ErrorNote, FlagChips, PageHeader, ReconBadge, RegistryBadge, ReviewerInput, RiskBar, StatusBadge, TxLink,
   useReviewer,
 } from "@/components/ui";
 
@@ -30,6 +30,7 @@ export default function RequestDetail() {
   const [busy, setBusy] = useState(false);
   const [reviewer, setReviewer] = useReviewer();
   const [edit, setEdit] = useState<Record<Field, string> | null>(null);
+  const [walletState, setWalletState] = useState<Awaited<ReturnType<typeof accountState>>>(null);
 
   const load = useCallback(() => {
     get<AidRequest>(`/requests/${encodeURIComponent(id)}`)
@@ -42,6 +43,9 @@ export default function RequestDetail() {
       }, (e) => setError((e as Error).message));
   }, [id]);
   useEffect(() => { load(); }, [load]);
+  useEffect(() => {
+    if (req?.wallet) accountState(req.wallet).then(setWalletState);
+  }, [req?.wallet]);
 
   async function act(action: "approve" | "reject" | "hold" | "retry" | "correct") {
     setBusy(true);
@@ -60,95 +64,122 @@ export default function RequestDetail() {
   }
 
   if (!req) {
-    return <><ErrorNote error={error} />{!error && <p className="text-sm text-stone-500">Loading…</p>}</>;
+    return <><ErrorNote error={error} />{!error && <p className="text-[13px] text-zinc-500">Loading…</p>}</>;
   }
   const open = req.status === "PENDING_REVIEW" || req.status === "HELD";
   const invalid = req.status === "INVALID";
   const paid = req.status === "CONFIRMED" || req.status === "CLAIMED";
 
+  const decisionTitle = invalid ? "Invalid record" : req.status !== "FAILED" ? "Decision"
+    : req.registry_status === "BLOCKED" ? "Blocked by the registry" : "Retry";
+
   return (
     <>
-      <Link href="/requests" className="text-sm text-stone-500 hover:text-stone-800">← All requests</Link>
-      <div className="mb-6 mt-2 flex flex-wrap items-center gap-3">
-        <h1 className="font-mono text-2xl font-semibold text-stone-900">{req.request_ref}</h1>
-        <StatusBadge status={req.status} />
-      </div>
+      <PageHeader
+        eyebrow={<><Link href="/requests" className="hover:text-zinc-900">Requests</Link><span className="mx-1.5 text-zinc-300">/</span>{req.batch_id ?? "No batch"}</>}
+        title={<span className="flex flex-wrap items-center gap-3"><span className="font-mono">{req.request_ref}</span><StatusBadge status={req.status} /></span>}
+        action={
+          <div className="text-right">
+            <div className="text-[28px] font-semibold leading-none tracking-tight tabular-nums text-zinc-900">{formatAmount(req.amount)}</div>
+            <div className="mt-1 text-[12px] text-zinc-500">{req.asset}</div>
+          </div>
+        } />
       <ErrorNote error={error} />
 
-      <div className="grid gap-4 md:grid-cols-3">
-        <Card title="Request" className="md:col-span-2">
-          <div className="mb-4 text-3xl font-semibold tabular-nums">
-            {formatAmount(req.amount)} <span className="text-base font-normal text-stone-500">{req.asset}</span>
-          </div>
-          <dl className="grid grid-cols-[8rem_1fr] gap-y-2 text-sm">
-            <dt className="text-stone-500">Beneficiary</dt>
-            <dd>
-              <span className="font-mono text-xs">{req.beneficiary_id || "—"}</span>
-              <span className="ml-2 text-xs text-stone-400">pseudonymous (HMAC of the real ID)</span>
-            </dd>
-            <dt className="text-stone-500">Batch</dt><dd>{req.batch_id ?? "—"}</dd>
-            <dt className="text-stone-500">Wallet</dt>
-            <dd className="break-all font-mono text-xs">
-              <a href={explorerAccount(req.wallet)} target="_blank" rel="noreferrer" className="text-teal-700 hover:underline">{req.wallet} ↗</a>
-            </dd>
-            <dt className="text-stone-500">Requested</dt><dd>{formatTime(req.created_at)}</dd>
-            <dt className="text-stone-500">AI risk</dt><dd><RiskBar score={req.risk_score} /></dd>
-            {req.reviewer && (<><dt className="text-stone-500">Reviewed by</dt><dd>{req.reviewer}{req.note && <span className="text-stone-500"> · “{req.note}”</span>}</dd></>)}
-            {req.method && (<><dt className="text-stone-500">Paid as</dt><dd>{METHOD_LABEL[req.method]}</dd></>)}
-            {req.tx_hash && (<><dt className="text-stone-500">Transaction</dt><dd><TxLink hash={req.tx_hash} label={req.tx_hash} /></dd></>)}
-            {paid && (
-              <>
-                <dt className="text-stone-500">Delivery</dt>
-                <dd>
+      <div className="grid gap-6 lg:grid-cols-3">
+        <div className="flex min-w-0 flex-col gap-6 lg:col-span-2">
+          <Card title="Request">
+            <dl className="grid grid-cols-1 gap-x-6 gap-y-3 text-[13px] sm:grid-cols-[9rem_1fr]">
+              <Row label="Beneficiary">
+                <span className="font-mono text-[12px]">{req.beneficiary_id || "—"}</span>
+                <span className="ml-2 text-[12px] text-zinc-400">pseudonymous token</span>
+              </Row>
+              <Row label="Wallet">
+                {walletState === "missing" || walletState === "invalid" ? (
+                  <>
+                    <span className="break-all font-mono text-[12px] text-zinc-800">{req.wallet}</span>
+                    <div className="mt-0.5 text-[12px] text-zinc-500">
+                      {walletState === "invalid"
+                        ? "Not a valid Stellar address."
+                        : "Not on Stellar yet: never funded, so explorers can't show it. A payout waits as a claimable balance until the owner opens the account and claims."}
+                    </div>
+                  </>
+                ) : (
+                  <a href={explorerAccount(req.wallet)} target="_blank" rel="noreferrer" className="link break-all font-mono text-[12px]">{req.wallet} ↗</a>
+                )}
+              </Row>
+              <Row label="Requested">{formatTime(req.created_at)}</Row>
+              <Row label="AI risk"><RiskBar score={req.risk_score} /></Row>
+              {req.reviewer && <Row label="Reviewed by">{req.reviewer}{req.note && <span className="text-zinc-500"> · “{req.note}”</span>}</Row>}
+            </dl>
+          </Card>
+
+          <Card title="On Stellar">
+            <dl className="grid grid-cols-1 gap-x-6 gap-y-3 text-[13px] sm:grid-cols-[9rem_1fr]">
+              <Row label="Paid as">{req.method ? METHOD_LABEL[req.method] : <span className="text-zinc-400">Not paid yet</span>}</Row>
+              {req.tx_hash && <Row label="Transaction"><TxLink hash={req.tx_hash} label={req.tx_hash} /></Row>}
+              {paid && req.method === "claimable_balance" && (
+                <Row label="Delivery">
                   <ClaimBadge method={req.method} status={req.claim_status} />
-                  {req.claim_status && <span className="ml-2 text-xs text-stone-500">{CLAIM_STYLE[req.claim_status]?.why}</span>}
-                  {req.claimed_at && <span className="ml-2 text-xs text-stone-400">{formatTime(req.claimed_at)}</span>}
-                </dd>
-              </>
-            )}
-            {req.error && (<><dt className="text-stone-500">Error</dt><dd className="text-rose-700">{req.error}</dd></>)}
-            {req.registry_status && (
-              <>
-                <dt className="text-stone-500">On-chain registry</dt>
-                <dd>
+                  {req.claim_status && <span className="ml-2 text-[12px] text-zinc-500">{CLAIM_STYLE[req.claim_status]?.why}</span>}
+                  {req.claimed_at && <span className="ml-2 text-[12px] text-zinc-400">{formatTime(req.claimed_at)}</span>}
+                </Row>
+              )}
+              {req.error && <Row label="Error"><span className="text-rose-600">{req.error}</span></Row>}
+              {req.registry_status && (
+                <Row label="Registry">
                   <RegistryBadge status={req.registry_status} />
-                  <span className="ml-2 text-xs text-stone-500">{REGISTRY_STYLE[req.registry_status]?.why}</span>
+                  <span className="ml-2 text-[12px] text-zinc-500">{REGISTRY_STYLE[req.registry_status]?.why}</span>
                   {req.registry_key && (
-                    <div className="mt-0.5 font-mono text-[11px] text-stone-400" title="HMAC(program | batch | beneficiary); reveals nothing about the person">
+                    <div className="mt-1 font-mono text-[11px] text-zinc-400" title="HMAC(program | batch | beneficiary); reveals nothing about the person">
                       key {req.registry_key.slice(0, 16)}…
                     </div>
                   )}
-                </dd>
-              </>
-            )}
-            <dt className="text-stone-500">Reconciliation</dt>
-            <dd>
-              <ReconBadge category={req.recon_status} />
-              {req.recon_reasons?.map((r) => <span key={r} className="ml-2 text-xs text-stone-600">{describeReason(r)}</span>)}
-              {req.recon_at && <span className="ml-2 text-xs text-stone-400">checked {formatTime(req.recon_at)}</span>}
-            </dd>
-          </dl>
-        </Card>
+                </Row>
+              )}
+              <Row label="Reconciliation">
+                <ReconBadge category={req.recon_status} />
+                {req.recon_reasons?.map((r) => <span key={r} className="ml-2 text-[12px] text-zinc-600">{describeReason(r)}</span>)}
+                {req.recon_at && <span className="ml-2 text-[12px] text-zinc-400">checked {formatTime(req.recon_at)}</span>}
+              </Row>
+            </dl>
+          </Card>
 
-        <div className="flex flex-col gap-4">
-          <Card title="Why it was flagged"><FlagChips flags={req.flags} verbose /></Card>
+          {(open || invalid) && edit && (
+            <Card title="Correct details" action="Re-screened from scratch and logged with old and new values">
+              <div id="correct" className="grid gap-3 sm:grid-cols-2">
+                {FIELDS.map(([k, label]) => (
+                  <label key={k} className="flex flex-col gap-1 text-[12px] text-zinc-500">
+                    {label}
+                    <input value={edit[k]} onChange={(e) => setEdit({ ...edit, [k]: e.target.value })}
+                      placeholder={k === "beneficiary_id" ? "Type the real ID to change" : undefined}
+                      className={`input h-9 ${k === "wallet" ? "font-mono" : ""}`} />
+                  </label>
+                ))}
+              </div>
+              <div className="mt-4 flex flex-wrap items-center justify-between gap-3">
+                <p className="text-[12px] text-zinc-500">It then needs a fresh decision. A typed beneficiary ID is stored only as its HMAC token.</p>
+                <Button variant="secondary" disabled={busy || !reviewer.trim()} onClick={() => act("correct")}>Save correction</Button>
+              </div>
+            </Card>
+          )}
+        </div>
 
+        <div className="flex min-w-0 flex-col gap-6">
           {(open || invalid || req.status === "FAILED") && (
-            <Card title={invalid ? "Invalid record" : req.status !== "FAILED" ? "Decision" : req.registry_status === "BLOCKED" ? "Blocked by the registry" : "Retry"}>
+            <Card title={decisionTitle}>
               <div className="flex flex-col gap-2">
-                <ReviewerInput value={reviewer} onChange={setReviewer} />
+                <ReviewerInput value={reviewer} onChange={setReviewer} compact />
                 {invalid ? (
                   <>
-                    <p className="text-xs text-stone-600">This row failed validation at upload. Fix it below, or reject it.</p>
-                    <input placeholder="Note (optional)" value={note} onChange={(e) => setNote(e.target.value)}
-                      className="rounded-lg border border-stone-300 px-2 py-1 text-sm focus:border-teal-600 focus:outline-none" />
+                    <p className="text-[12px] text-zinc-500">This row failed validation at upload. Fix it, or reject it.</p>
+                    <input placeholder="Note (optional)" value={note} onChange={(e) => setNote(e.target.value)} className="input" />
                     <Button variant="danger" disabled={busy || !reviewer.trim()} onClick={() => act("reject")}>Reject</Button>
                   </>
                 ) : open ? (
                   <>
-                    {req.status === "HELD" && req.note && <p className="text-xs text-stone-500">Held: “{req.note}”</p>}
-                    <input placeholder="Note (optional)" value={note} onChange={(e) => setNote(e.target.value)}
-                      className="rounded-lg border border-stone-300 px-2 py-1 text-sm focus:border-teal-600 focus:outline-none" />
+                    {req.status === "HELD" && req.note && <p className="text-[12px] text-zinc-500">Held: “{req.note}”</p>}
+                    <input placeholder="Note (optional)" value={note} onChange={(e) => setNote(e.target.value)} className="input" />
                     <Button disabled={busy || !reviewer.trim()} onClick={() => act("approve")}>Approve</Button>
                     <div className="flex gap-2">
                       {req.status === "PENDING_REVIEW" && (
@@ -158,61 +189,53 @@ export default function RequestDetail() {
                     </div>
                   </>
                 ) : req.registry_status === "BLOCKED" ? (
-                  <p className="text-xs text-stone-600">
+                  <p className="text-[13px] leading-relaxed text-zinc-600">
                     Nothing was sent: the on-chain registry already holds a payout for this person in batch{" "}
-                    <b>{req.batch_id}</b>. Retrying would be refused again. If this really is a separate payout,
-                    it belongs in another batch.
+                    <b className="font-medium">{req.batch_id}</b>. A retry would be refused again; a genuinely separate payout belongs in another batch.
                   </p>
                 ) : (
                   <>
-                    <p className="text-xs text-stone-500">The old transaction can no longer land, so sending a new one is safe.</p>
+                    <p className="text-[12px] text-zinc-500">The old transaction can no longer land, so sending a new one is safe.</p>
                     <Button disabled={busy || !reviewer.trim()} onClick={() => act("retry")}>Send back to approved</Button>
                   </>
                 )}
+                {!reviewer.trim() && <p className="text-[12px] text-amber-600">Enter your name under Reviewing as first.</p>}
               </div>
             </Card>
           )}
+
+          <Card title="Flags"><FlagChips flags={req.flags} verbose /></Card>
+
+          <Card title="Activity">
+            {req.events?.length ? (
+              <ol className="relative">
+                {req.events.map((e, i) => (
+                  <li key={i} className="relative pb-4 pl-5 last:pb-0">
+                    {i < (req.events?.length ?? 0) - 1 && <span className="absolute top-3 bottom-0 left-[3px] w-px bg-zinc-200" />}
+                    <span className="absolute top-[7px] left-0 h-[7px] w-[7px] rounded-full border border-zinc-400 bg-white" />
+                    <div className="flex items-baseline justify-between gap-2">
+                      <span className="text-[13px] font-medium capitalize text-zinc-800">{e.kind.replaceAll("_", " ")}</span>
+                      <span className="shrink-0 text-[11px] text-zinc-400">{formatTime(e.at)}</span>
+                    </div>
+                    {e.detail && <pre className="mt-1 overflow-x-auto whitespace-pre-wrap break-all rounded bg-zinc-50 px-2 py-1 font-mono text-[11px] text-zinc-500">{e.detail}</pre>}
+                  </li>
+                ))}
+              </ol>
+            ) : (
+              <p className="text-[13px] text-zinc-500">No events yet.</p>
+            )}
+          </Card>
         </div>
       </div>
+    </>
+  );
+}
 
-      {(open || invalid) && edit && (
-        <Card title="Correct details" className="mt-4">
-          <div id="correct" className="grid gap-3 sm:grid-cols-2 lg:grid-cols-5">
-            {FIELDS.map(([k, label]) => (
-              <label key={k} className="flex flex-col gap-1 text-xs text-stone-500">
-                {label}
-                <input value={edit[k]} onChange={(e) => setEdit({ ...edit, [k]: e.target.value })}
-                  placeholder={k === "beneficiary_id" ? "type the real ID to change" : undefined}
-                  className={`h-9 rounded-lg border border-stone-300 px-2 text-sm text-stone-900 focus:border-teal-600 focus:outline-none ${k === "wallet" ? "font-mono" : ""}`} />
-              </label>
-            ))}
-          </div>
-          <div className="mt-3 flex flex-wrap items-center justify-between gap-3">
-          <p className="text-xs text-stone-500">
-            The fix is validated, screened again from scratch, and logged with old and new values. It then needs a fresh decision.
-            A beneficiary ID you type is stored only as its HMAC token.
-          </p>
-            <Button variant="secondary" disabled={busy || !reviewer.trim()} onClick={() => act("correct")}>Save correction</Button>
-          </div>
-        </Card>
-      )}
-
-      <Card title="Audit trail" className="mt-4">
-        {req.events?.length ? (
-          <ol className="relative ml-2 border-l border-stone-200">
-            {req.events.map((e, i) => (
-              <li key={i} className="mb-3 ml-4">
-                <span className="absolute -left-1.5 mt-1.5 h-3 w-3 rounded-full border-2 border-white bg-teal-600" />
-                <div className="text-sm font-medium capitalize text-stone-800">{e.kind.replaceAll("_", " ")}</div>
-                <div className="text-xs text-stone-500">{formatTime(e.at)}</div>
-                {e.detail && <pre className="mt-1 overflow-x-auto whitespace-pre-wrap break-all rounded bg-stone-50 px-2 py-1 font-mono text-[11px] text-stone-600">{e.detail}</pre>}
-              </li>
-            ))}
-          </ol>
-        ) : (
-          <p className="text-sm text-stone-500">No events yet.</p>
-        )}
-      </Card>
+function Row({ label, children }: { label: string; children: React.ReactNode }) {
+  return (
+    <>
+      <dt className="text-zinc-500">{label}</dt>
+      <dd className="min-w-0">{children}</dd>
     </>
   );
 }
