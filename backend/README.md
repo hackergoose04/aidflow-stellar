@@ -1,6 +1,7 @@
 # AidFlow backend
 
-FastAPI app. Stores requests in SQLite (`data/aidflow.db`), pays on Stellar **Testnet**.
+FastAPI app. Stores requests in Postgres when `DATABASE_URL` is set (deployments), otherwise in
+a local SQLite file (`data/aidflow.db`). Pays on Stellar **Testnet**.
 
 ## Run
 
@@ -14,6 +15,30 @@ uvicorn backend.app.main:app --reload
 Open http://127.0.0.1:8000/docs to try every endpoint in the browser.
 
 Tests (offline, no network): `pytest backend/tests`
+
+## Storage
+
+| | When | Where |
+| --- | --- | --- |
+| Postgres | `DATABASE_URL` is set, e.g. a Neon connection string | Deployments: several backend instances share one database |
+| SQLite | `DATABASE_URL` is empty | Local development: `data/aidflow.db` (or `AIDFLOW_DB`) |
+
+The schema is created on first connect, either way. All SQL is written once, with `?`
+placeholders; `backend/app/db.py` translates it for Postgres. Keep new queries to SQL that both
+accept, and run the tests on both:
+
+```bash
+pytest backend/tests                                                    # SQLite
+createdb aidflow_test
+TEST_DATABASE_URL=postgresql://localhost/aidflow_test pytest backend/tests  # Postgres, wiped per test
+```
+
+Two workers paying at once can't pay a request twice: a payout moves `APPROVED -> SUBMITTED`
+with a conditional update, and only the worker whose update succeeds submits the transaction
+(`backend/tests/test_storage.py` races four workers to check it).
+
+Moving existing local data into Postgres, once: `DATABASE_URL=... python scripts/sqlite_to_postgres.py`.
+`scripts/reset_demo.py` empties the Postgres tables (after a typed confirmation) when `DATABASE_URL` is set.
 
 ## Pipeline
 
@@ -87,7 +112,7 @@ Matches the design doc's payment state machine (its VALIDATED / FLAGGED / CLEARE
   payout slot in a batch, and additional payout needing review.
 - **Review** follows the design doc: approve, hold for further review, correct, or reject. A
   correction is re-validated and re-screened, and its old/new values go to the audit trail.
-- Settings (`AMOUNT_LIMIT`, `DUPLICATE_WINDOW_HOURS`, `RECLAIM_AFTER_SECONDS`, `AIDFLOW_DB`)
+- Settings (`AMOUNT_LIMIT`, `DUPLICATE_WINDOW_HOURS`, `RECLAIM_AFTER_SECONDS`, `DATABASE_URL`, `AIDFLOW_DB`)
   can be overridden in `.env`.
 
 ## Testnet demo with real payouts

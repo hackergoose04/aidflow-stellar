@@ -27,6 +27,7 @@ from backend.app.main import app  # noqa: E402
 
 def main() -> None:
     config.DB_PATH = Path(tempfile.mkdtemp()) / "claim_demo.db"
+    config.DATABASE_URL = None  # a throwaway local database, never the shared one
     c = TestClient(app)
     ben = Keypair.random()
     import requests

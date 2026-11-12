@@ -31,7 +31,8 @@ XLM_USD = float(os.getenv("XLM_USD", "0.30"))
 COST_BENCHMARK = 0.064   # World Bank global average remittance cost
 COST_TARGET = 0.03       # UN SDG 10.c target
 
-# Storage
+# Storage: Postgres when DATABASE_URL is set (deployments), else a local SQLite file.
+DATABASE_URL = os.getenv("DATABASE_URL") or None
 DB_PATH = Path(os.getenv("AIDFLOW_DB", ROOT / "data" / "aidflow.db"))
 
 # Screening rules

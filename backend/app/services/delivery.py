@@ -9,11 +9,10 @@ the start, not the end. Three numbers answer that from data we already keep:
 from __future__ import annotations
 
 import json
-import sqlite3
 import statistics
 from datetime import datetime, timedelta
 
-from .. import config, stellar_client as sc
+from .. import config, db, stellar_client as sc
 from ..db import Status
 
 STROOPS = 10_000_000
@@ -23,7 +22,7 @@ def _ts(iso: str | None) -> datetime | None:
     return datetime.fromisoformat(iso.replace("Z", "+00:00")) if iso else None
 
 
-def _first_event(conn: sqlite3.Connection, ref: str, kind: str, last: bool = False) -> str | None:
+def _first_event(conn: db.Connection, ref: str, kind: str, last: bool = False) -> str | None:
     order = "DESC" if last else "ASC"
     row = conn.execute(f"SELECT at FROM events WHERE request_ref = ? AND kind = ? ORDER BY id {order} LIMIT 1",
                        (ref, kind)).fetchone()
@@ -36,7 +35,7 @@ def _stats(seconds: list[float]) -> dict:
     return {"n": len(seconds), "median_s": statistics.median(seconds), "max_s": max(seconds)}
 
 
-def timing(conn: sqlite3.Connection) -> dict:
+def timing(conn: db.Connection) -> dict:
     """Approval -> on chain, approval -> in the beneficiary's hands, and submit -> on chain.
 
     "In hand" is the confirmation for a direct payment (it lands in the wallet), and the claim
@@ -71,7 +70,7 @@ def timing(conn: sqlite3.Connection) -> dict:
             "legs": {k: (statistics.median(v) if v else None) for k, v in legs.items()}}
 
 
-def arrival(conn: sqlite3.Connection, now: datetime | None = None) -> dict:
+def arrival(conn: db.Connection, now: datetime | None = None) -> dict:
     """Where every paid-out amount is right now: in the beneficiary's hands, still waiting to be
     claimed (and for how long), or returned to the NGO after the claim window."""
     in_hand = conn.execute("SELECT COUNT(*) FROM requests WHERE status = ? OR (status = ? AND method = 'payment')",
@@ -82,7 +81,7 @@ def arrival(conn: sqlite3.Connection, now: datetime | None = None) -> dict:
     return {"in_hand": in_hand, "waiting": len(pending) - overdue, "overdue": overdue, "returned": returned}
 
 
-def unclaimed(conn: sqlite3.Connection, now: datetime | None = None) -> list[dict]:
+def unclaimed(conn: db.Connection, now: datetime | None = None) -> list[dict]:
     """Claimable balances still waiting for the beneficiary, oldest first."""
     now = now or datetime.now().astimezone()
     out = []
@@ -119,7 +118,7 @@ def _fee_stroops(tx_hash: str) -> int | None:
 FEE_SAMPLE = 25  # most recent payouts used for the fee average (each is up to 3 Horizon lookups)
 
 
-def cost(conn: sqlite3.Connection) -> dict:
+def cost(conn: db.Connection) -> dict:
     """Average network cost per delivered payout: the payment plus its two registry calls.
 
     All database reads happen first, so no cursor stays open while Horizon is queried."""

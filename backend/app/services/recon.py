@@ -25,7 +25,6 @@ from __future__ import annotations
 
 import base64
 import json
-import sqlite3
 from collections import defaultdict
 
 from .. import config, db, registry, stellar_client as sc
@@ -138,7 +137,7 @@ def classify(rows: list[dict], chain: list[dict], issuer: str,
     return {"summary": summary, "results": results, "unrecorded_on_chain": unrecorded}
 
 
-def run(conn: sqlite3.Connection) -> dict:
+def run(conn: db.Connection) -> dict:
     rows = [dict(r) for r in conn.execute("SELECT * FROM requests")]
     chain = fetch_chain_payouts(config.public("DISTRIBUTION"))
     entries = None

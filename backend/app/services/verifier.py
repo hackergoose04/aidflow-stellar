@@ -1,7 +1,6 @@
 """Verifier: resolve SUBMITTED / UNKNOWN requests by looking their tx hash up on chain."""
 from __future__ import annotations
 
-import sqlite3
 from datetime import datetime, timedelta, timezone
 
 from .. import config, db, stellar_client as sc
@@ -9,7 +8,7 @@ from ..db import Status
 from .executor import repair_registry, settle_registry
 
 
-def run(conn: sqlite3.Connection) -> list[dict]:
+def run(conn: db.Connection) -> list[dict]:
     rows = conn.execute("SELECT request_ref, tx_hash, submitted_at FROM requests"
                         " WHERE status IN (?, ?)", (Status.SUBMITTED, Status.UNKNOWN)).fetchall()
     results = []
@@ -29,7 +28,7 @@ def run(conn: sqlite3.Connection) -> list[dict]:
                 new_status, error = Status.FAILED, "expired without landing; safe to retry"
         if new_status:
             conn.execute("UPDATE requests SET status = ?, error = ?, updated_at = ?,"
-                         " claim_status = CASE WHEN ? = 'CONFIRMED' AND method = 'claimable_balance'"
+                         " claim_status = CASE WHEN CAST(? AS TEXT) = 'CONFIRMED' AND method = 'claimable_balance'"
                          " THEN 'UNCLAIMED' ELSE claim_status END WHERE request_ref = ?",
                          (new_status, error, db.now(), new_status, ref))
             db.log(conn, ref, "verified", {"result": result, "status": new_status})

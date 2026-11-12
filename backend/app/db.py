@@ -1,10 +1,16 @@
-"""SQLite storage: one row per request, plus an append-only audit log."""
+"""Storage: one row per request, plus an append-only audit log.
+
+Postgres when DATABASE_URL is set (deployments: several instances share one database), else a
+local SQLite file (DB_PATH) for development and tests. Both are reached through the same small
+dialect: `?` placeholders, rows readable by column name or position, explicit commit()."""
 from __future__ import annotations
 
 import json
 import sqlite3
+from collections.abc import Sequence
 from datetime import datetime, timezone
 from enum import StrEnum
+from typing import Any, Union
 
 from . import config
 
@@ -32,7 +38,8 @@ PAID = (Status.CONFIRMED, Status.CLAIMED)
 
 PAYOUT_SLOT_COLUMN = f"TEXT NOT NULL DEFAULT '{config.DEFAULT_PAYOUT_SLOT}'"
 
-SCHEMA = f"""
+def _schema(event_id: str, real: str) -> str:
+    return f"""
 CREATE TABLE IF NOT EXISTS requests (
     request_ref    TEXT PRIMARY KEY,
     batch_id       TEXT,
@@ -44,7 +51,7 @@ CREATE TABLE IF NOT EXISTS requests (
     created_at     TEXT NOT NULL,      -- ISO 8601 UTC
     status         TEXT NOT NULL,
     flags          TEXT NOT NULL DEFAULT '[]',  -- JSON list of reasons for the reviewer
-    risk_score     REAL,               -- from the ML model, when available
+    risk_score     {real},             -- from the ML model, when available
     method         TEXT,               -- payment | claimable_balance
     tx_hash        TEXT,
     submitted_at   TEXT,
@@ -67,13 +74,18 @@ CREATE INDEX IF NOT EXISTS idx_requests_wallet ON requests(wallet);
 CREATE INDEX IF NOT EXISTS idx_requests_batch ON requests(batch_id);
 
 CREATE TABLE IF NOT EXISTS events (
-    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    id          {event_id},
     request_ref TEXT,
     kind        TEXT NOT NULL,
     detail      TEXT,
     at          TEXT NOT NULL
 );
+CREATE INDEX IF NOT EXISTS idx_events_ref ON events(request_ref);
 """
+
+
+SQLITE_SCHEMA = _schema("INTEGER PRIMARY KEY AUTOINCREMENT", "REAL")
+POSTGRES_SCHEMA = _schema("BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY", "DOUBLE PRECISION")
 
 
 # Columns added after the first release: added to existing databases on connect.
@@ -89,10 +101,73 @@ def now() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
-_migrated: set[str] = set()  # DB paths already migrated by this process
+_migrated: set[str] = set()  # databases whose schema this process has already checked
+SCHEMA_LOCK = 0x41494446  # Postgres advisory lock id, held while creating or migrating the schema
 
 
-def connect() -> sqlite3.Connection:
+class Row(dict):
+    """A Postgres result row, readable by column name or position like sqlite3.Row."""
+
+    def __init__(self, names: Sequence[str], values: Sequence[Any]):
+        super().__init__(zip(names, values))
+        self._values = tuple(values)
+
+    def __getitem__(self, key):
+        return self._values[key] if isinstance(key, int) else super().__getitem__(key)
+
+
+def _row_factory(cursor):
+    names = [c.name for c in cursor.description or ()]
+    return lambda values: Row(names, values)
+
+
+class PostgresConnection:
+    """A psycopg connection that takes the same SQL as sqlite3: `?` placeholders become `%s`."""
+
+    def __init__(self, url: str):
+        import psycopg  # only needed when DATABASE_URL is set
+
+        # prepare_threshold=None: no server-side prepared statements, which connection poolers
+        # (Neon's pooled endpoint, PgBouncer) can't carry from one client to the next.
+        self._conn = psycopg.connect(url, row_factory=_row_factory, prepare_threshold=None,
+                                     connect_timeout=10)
+
+    def execute(self, sql: str, params: Sequence[Any] = ()):
+        if not params:
+            return self._conn.execute(sql)
+        return self._conn.execute(sql.replace("%", "%%").replace("?", "%s"), tuple(params))
+
+    def commit(self) -> None:
+        self._conn.commit()
+
+    def rollback(self) -> None:
+        self._conn.rollback()
+
+    def close(self) -> None:
+        self._conn.close()
+
+
+Connection = Union[sqlite3.Connection, PostgresConnection]
+
+
+def connect() -> Connection:
+    return _connect_postgres(config.DATABASE_URL) if config.DATABASE_URL else _connect_sqlite()
+
+
+def _connect_postgres(url: str) -> PostgresConnection:
+    conn = PostgresConnection(url)
+    if url not in _migrated:
+        # Several instances can start at once: one creates or migrates the schema, the rest wait.
+        conn.execute(f"SELECT pg_advisory_xact_lock({SCHEMA_LOCK})")
+        conn.execute(POSTGRES_SCHEMA)
+        for col, typ in MIGRATIONS.items():
+            conn.execute(f"ALTER TABLE requests ADD COLUMN IF NOT EXISTS {col} {typ}")
+        conn.commit()
+        _migrated.add(url)
+    return conn
+
+
+def _connect_sqlite() -> sqlite3.Connection:
     config.DB_PATH.parent.mkdir(parents=True, exist_ok=True)
     # Every request opens its own connection, and the UI fires several at once. WAL lets readers
     # and writers proceed together; the busy timeout covers the brief moments they can't.
@@ -117,12 +192,12 @@ def connect() -> sqlite3.Connection:
             for old, new in RENAMED.items():
                 conn.execute("UPDATE requests SET status = ? WHERE status = ?", (new, old))
             conn.commit()
-        conn.executescript(SCHEMA)
+        conn.executescript(SQLITE_SCHEMA)
         _migrated.add(key)
     return conn
 
 
-def to_dict(row: sqlite3.Row | None) -> dict | None:
+def to_dict(row) -> dict | None:
     if row is None:
         return None
     d = dict(row)
@@ -133,11 +208,11 @@ def to_dict(row: sqlite3.Row | None) -> dict | None:
     return d
 
 
-def get(conn: sqlite3.Connection, ref: str) -> dict | None:
+def get(conn: Connection, ref: str) -> dict | None:
     return to_dict(conn.execute("SELECT * FROM requests WHERE request_ref = ?", (ref,)).fetchone())
 
 
-def add_flags(conn: sqlite3.Connection, ref: str, new: list[str]) -> None:
+def add_flags(conn: Connection, ref: str, new: list[str]) -> None:
     if not new:
         return
     current = get(conn, ref)["flags"]
@@ -146,7 +221,7 @@ def add_flags(conn: sqlite3.Connection, ref: str, new: list[str]) -> None:
                  (json.dumps(merged), now(), ref))
 
 
-def log(conn: sqlite3.Connection, ref: str | None, kind: str, detail: dict | str | None = None) -> None:
+def log(conn: Connection, ref: str | None, kind: str, detail: dict | str | None = None) -> None:
     if isinstance(detail, dict):
         detail = json.dumps(detail)
     conn.execute("INSERT INTO events (request_ref, kind, detail, at) VALUES (?, ?, ?, ?)",

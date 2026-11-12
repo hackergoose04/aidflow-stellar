@@ -7,7 +7,6 @@ from __future__ import annotations
 import json
 import logging
 import os
-import sqlite3
 from collections.abc import Iterator
 
 from fastapi import Depends, FastAPI, HTTPException, UploadFile
@@ -44,7 +43,7 @@ app.add_middleware(
 app.include_router(public.router)
 
 
-def get_conn() -> Iterator[sqlite3.Connection]:
+def get_conn() -> Iterator[db.Connection]:
     conn = db.connect()
     try:
         yield conn
@@ -78,7 +77,7 @@ def health() -> dict:
 
 
 @app.get("/summary")
-def summary(conn: sqlite3.Connection = Depends(get_conn)) -> dict:
+def summary(conn: db.Connection = Depends(get_conn)) -> dict:
     counts = {s.value: 0 for s in Status}
     for r in conn.execute("SELECT status, COUNT(*) AS n FROM requests GROUP BY status"):
         counts[r["status"]] = r["n"]
@@ -93,7 +92,7 @@ def summary(conn: sqlite3.Connection = Depends(get_conn)) -> dict:
         "SELECT batch_id, COUNT(*) AS requests,"
         " SUM(CASE WHEN status IN ('CONFIRMED', 'CLAIMED') THEN 1 ELSE 0 END) AS confirmed,"
         " SUM(CASE WHEN flags != '[]' THEN 1 ELSE 0 END) AS flagged,"
-        " ROUND(SUM(CAST(amount AS REAL)), 2) AS amount"
+        " CAST(ROUND(SUM(CAST(amount AS NUMERIC)), 2) AS DOUBLE PRECISION) AS amount"
         " FROM requests GROUP BY batch_id ORDER BY batch_id")]
     risk = [r[0] for r in conn.execute("SELECT risk_score FROM requests WHERE risk_score IS NOT NULL")]
     hist = [0] * 10
@@ -109,14 +108,14 @@ def summary(conn: sqlite3.Connection = Depends(get_conn)) -> dict:
 
 
 @app.get("/delivery")
-def delivery_metrics(conn: sqlite3.Connection = Depends(get_conn)) -> dict:
+def delivery_metrics(conn: db.Connection = Depends(get_conn)) -> dict:
     """Decision -> money in hand, and payouts still waiting for the beneficiary (last mile)."""
     return {"timing": delivery.timing(conn), "unclaimed": delivery.unclaimed(conn),
             "arrival": delivery.arrival(conn), "alert_hours": config.CLAIM_ALERT_HOURS}
 
 
 @app.get("/delivery/cost")
-def delivery_cost(conn: sqlite3.Connection = Depends(get_conn)) -> dict:
+def delivery_cost(conn: db.Connection = Depends(get_conn)) -> dict:
     """Network fees actually charged per payout (reads Horizon, so kept off /summary)."""
     return delivery.cost(conn)
 
@@ -160,7 +159,7 @@ def recon_eval() -> dict:
 
 
 @app.post("/requests/upload")
-async def upload(file: UploadFile, conn: sqlite3.Connection = Depends(get_conn)) -> dict:
+async def upload(file: UploadFile, conn: db.Connection = Depends(get_conn)) -> dict:
     text = (await file.read()).decode("utf-8")
     try:
         return ingest.ingest_csv(conn, text)
@@ -171,7 +170,7 @@ async def upload(file: UploadFile, conn: sqlite3.Connection = Depends(get_conn))
 @app.get("/requests")
 def list_requests(status: Status | None = None, flagged: bool | None = None,
                   batch: str | None = None, recon_status: str | None = None,
-                  conn: sqlite3.Connection = Depends(get_conn)) -> list[dict]:
+                  conn: db.Connection = Depends(get_conn)) -> list[dict]:
     sql, args = "SELECT * FROM requests WHERE 1=1", []
     if status:
         sql += " AND status = ?"
@@ -188,7 +187,7 @@ def list_requests(status: Status | None = None, flagged: bool | None = None,
 
 
 @app.get("/requests/{ref}")
-def get_request(ref: str, conn: sqlite3.Connection = Depends(get_conn)) -> dict:
+def get_request(ref: str, conn: db.Connection = Depends(get_conn)) -> dict:
     row = db.get(conn, ref)
     if row is None:
         raise HTTPException(404, f"{ref} not found")
@@ -207,22 +206,22 @@ def _decide(conn, ref, approve, body: Decision):
 
 
 @app.post("/requests/{ref}/approve")
-def approve(ref: str, body: Decision, conn: sqlite3.Connection = Depends(get_conn)) -> dict:
+def approve(ref: str, body: Decision, conn: db.Connection = Depends(get_conn)) -> dict:
     return _decide(conn, ref, True, body)
 
 
 @app.post("/requests/{ref}/reject")
-def reject(ref: str, body: Decision, conn: sqlite3.Connection = Depends(get_conn)) -> dict:
+def reject(ref: str, body: Decision, conn: db.Connection = Depends(get_conn)) -> dict:
     return _decide(conn, ref, False, body)
 
 
 @app.post("/requests/{ref}/hold")
-def hold(ref: str, body: Decision, conn: sqlite3.Connection = Depends(get_conn)) -> dict:
+def hold(ref: str, body: Decision, conn: db.Connection = Depends(get_conn)) -> dict:
     return _guard(lambda: review.hold(conn, ref, body.reviewer, body.note), ref)
 
 
 @app.post("/requests/{ref}/correct")
-def correct(ref: str, body: Correction, conn: sqlite3.Connection = Depends(get_conn)) -> dict:
+def correct(ref: str, body: Correction, conn: db.Connection = Depends(get_conn)) -> dict:
     changes = body.model_dump(exclude={"reviewer", "note"}, exclude_none=True)
     return _guard(lambda: review.correct(conn, ref, changes, body.reviewer, body.note), ref)
 
@@ -237,7 +236,7 @@ def _guard(fn, ref):
 
 
 @app.post("/requests/{ref}/retry")
-def retry(ref: str, body: Decision, conn: sqlite3.Connection = Depends(get_conn)) -> dict:
+def retry(ref: str, body: Decision, conn: db.Connection = Depends(get_conn)) -> dict:
     try:
         return review.retry(conn, ref, body.reviewer)
     except LookupError:
@@ -247,28 +246,28 @@ def retry(ref: str, body: Decision, conn: sqlite3.Connection = Depends(get_conn)
 
 
 @app.post("/review/approve-clean")
-def approve_clean(body: Decision, conn: sqlite3.Connection = Depends(get_conn)) -> dict:
+def approve_clean(body: Decision, conn: db.Connection = Depends(get_conn)) -> dict:
     refs = review.approve_clean(conn, body.reviewer)
     return {"approved": len(refs), "request_refs": refs}
 
 
 @app.post("/payouts/run")
-def run_payouts(limit: int = 20, batch: str | None = None, conn: sqlite3.Connection = Depends(get_conn)) -> list[dict]:
+def run_payouts(limit: int = 20, batch: str | None = None, conn: db.Connection = Depends(get_conn)) -> list[dict]:
     """Pay approved requests, oldest first. `batch` pays one disbursement batch only."""
     return executor.run(conn, limit, batch)
 
 
 @app.post("/payouts/verify")
-def verify_payouts(conn: sqlite3.Connection = Depends(get_conn)) -> list[dict]:
+def verify_payouts(conn: db.Connection = Depends(get_conn)) -> list[dict]:
     return verifier.run(conn)
 
 
 @app.post("/payouts/claims")
-def check_claims(conn: sqlite3.Connection = Depends(get_conn)) -> list[dict]:
+def check_claims(conn: db.Connection = Depends(get_conn)) -> list[dict]:
     """Have beneficiaries picked up their claimable balances?"""
     return claims.check(conn)
 
 
 @app.post("/recon/run")
-def run_recon(conn: sqlite3.Connection = Depends(get_conn)) -> dict:
+def run_recon(conn: db.Connection = Depends(get_conn)) -> dict:
     return recon.run(conn)

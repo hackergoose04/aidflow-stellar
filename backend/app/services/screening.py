@@ -5,7 +5,6 @@ Rules add human-readable flags. The model sets risk_score (0..1) and adds an
 requests wait for a human in review."""
 from __future__ import annotations
 
-import sqlite3
 from decimal import Decimal
 
 import pandas as pd
@@ -15,7 +14,7 @@ from ml import score as ml
 from .. import config, db
 
 
-def screen(conn: sqlite3.Connection, refs: list[str]) -> None:
+def screen(conn: db.Connection, refs: list[str]) -> None:
     for ref in refs:
         row = db.get(conn, ref)
         flags = []
@@ -36,13 +35,14 @@ def screen(conn: sqlite3.Connection, refs: list[str]) -> None:
     ml_score(conn, refs)
 
 
-def ml_score(conn: sqlite3.Connection, refs: list[str]) -> None:
+def ml_score(conn: db.Connection, refs: list[str]) -> None:
     """Score `refs` with the model, using every stored request as history."""
     if not refs:
         return
-    history = pd.read_sql_query(
-        "SELECT request_ref, beneficiary_id, wallet, amount, asset, created_at FROM requests"
-        " WHERE status NOT IN ('REJECTED', 'INVALID')", conn)
+    columns = ["request_ref", "beneficiary_id", "wallet", "amount", "asset", "created_at"]
+    rows = conn.execute(f"SELECT {', '.join(columns)} FROM requests"
+                        " WHERE status NOT IN ('REJECTED', 'INVALID')").fetchall()
+    history = pd.DataFrame([[r[c] for c in columns] for r in rows], columns=columns)
     risk = ml.score_frame(history)
     if risk is None:
         return  # no trained model yet: rules only
