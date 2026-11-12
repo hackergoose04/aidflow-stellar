@@ -94,7 +94,7 @@ export function Shell({ children }: { children: React.ReactNode }) {
               className="flex items-center gap-2 rounded-sm text-[14px] font-semibold text-zinc-900 hover:text-zinc-600 focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-zinc-900">
               <Logo /> AidFlow
             </Link>
-            <span className="flex items-center gap-4">
+            <span className="flex items-center gap-4 text-[13px]">
               <NetworkPill />
               <Link href={path.startsWith("/claim") ? "/donor" : "/claim"} className="text-zinc-500 hover:text-zinc-900">
                 {path.startsWith("/claim") ? "Donor report" : "Claim a payout"}
