@@ -192,77 +192,42 @@ function Step({ n, title, count, caption, alert = false, children }: {
 function LastMile({ d, cost }: { d: Delivery; cost: DeliveryCost | null }) {
   const t = d.timing;
   const overdue = d.unclaimed.filter((u) => u.overdue).length;
-  const scale = Math.max(cost?.benchmark ?? 0.064, cost?.cost_share ?? 0);
-  const bars: [string, number | undefined, string][] = [
-    ["AidFlow", cost?.cost_share, "bg-emerald-500"],
-    ["UN target", cost?.target, "bg-zinc-300"],
-    ["Global average", cost?.benchmark, "bg-zinc-300"],
+  const cells: { label: string; value: React.ReactNode; line: string; foot: string; tone?: string }[] = [
+    {
+      label: "Approval → money in hand",
+      value: t.approved_to_hand.n ? formatDuration(t.approved_to_hand.median_s) : "—",
+      line: t.approved_to_hand.n
+        ? `median of ${t.approved_to_hand.n} payouts · final on chain ${formatDuration(t.submitted_to_chain.median_s)} after sending`
+        : `${t.not_in_hand_yet} sent, waiting to be claimed`,
+      foot: "Typical aid disbursement takes weeks.",
+    },
+    {
+      label: "Network cost per payout",
+      value: cost?.payouts ? `${((cost.cost_share ?? 0) * 100).toFixed(2)}%` : "—",
+      line: cost?.payouts
+        ? `≈ $${(cost.avg_fee_usd ?? 0).toFixed(3)} each · global average ${((cost.benchmark ?? 0.064) * 100).toFixed(1)}% · UN target ${((cost.target ?? 0.03) * 100).toFixed(0)}%`
+        : cost ? "No payouts yet" : "Reading fees from Stellar…",
+      foot: "Testnet fees for payment and registry. Excludes cash-out.",
+    },
+    {
+      label: "Sent, not yet received",
+      value: d.unclaimed.length,
+      line: overdue ? `${overdue} waiting over ${formatHours(d.alert_hours)}: follow up` : `none waiting over ${formatHours(d.alert_hours)}`,
+      foot: "Unclaimed money returns to the NGO after 30 days.",
+      tone: overdue ? "text-rose-600" : undefined,
+    },
   ];
   return (
     <Card title="From decision to money in hand" action={<Link href="/payouts" className="link">Payouts →</Link>} flush className="mb-6">
-      <div className="grid lg:grid-cols-3">
-        <section className="border-zinc-100 px-5 py-4 max-lg:border-b">
-          <div className="text-[12px] text-zinc-500">Approval → money in hand</div>
-          <div className="mt-1 text-[26px] font-semibold tracking-tight tabular-nums text-zinc-900">
-            {t.approved_to_hand.n ? formatDuration(t.approved_to_hand.median_s) : "—"}
+      <div className="grid sm:grid-cols-3">
+        {cells.map((c, i) => (
+          <div key={c.label} className={`px-5 py-4 ${i > 0 ? "border-zinc-100 max-sm:border-t sm:border-l" : ""}`}>
+            <div className="text-[12px] text-zinc-500">{c.label}</div>
+            <div className={`mt-1 text-[26px] font-semibold leading-none tracking-tight tabular-nums ${c.tone ?? "text-zinc-900"}`}>{c.value}</div>
+            <div className="mt-2 text-[12px] text-zinc-500">{c.line}</div>
+            <div className="mt-3 text-[11px] text-zinc-400">{c.foot}</div>
           </div>
-          <div className="text-[12px] text-zinc-500">
-            {t.approved_to_hand.n
-              ? <>median of {t.approved_to_hand.n} payouts{t.approved_to_hand.max_s !== null && ` · slowest ${formatDuration(t.approved_to_hand.max_s)}`}</>
-              : `nothing received yet · ${t.not_in_hand_yet} sent, waiting to be claimed`}
-          </div>
-          <dl className="mt-4 divide-y divide-zinc-100 border-t border-zinc-100 text-[13px]">
-            <div className="flex justify-between py-2"><dt className="text-zinc-500">Sent → final on chain</dt><dd className="font-medium tabular-nums">{formatDuration(t.submitted_to_chain.median_s)}</dd></div>
-            <div className="flex justify-between py-2"><dt className="text-zinc-500">Approval → on chain</dt><dd className="font-medium tabular-nums">{formatDuration(t.approved_to_chain.median_s)}</dd></div>
-            <div className="flex justify-between py-2"><dt className="text-zinc-500">Typical aid disbursement</dt><dd className="text-zinc-500">weeks</dd></div>
-          </dl>
-        </section>
-
-        <section className="border-zinc-100 px-5 py-4 max-lg:border-b lg:border-l">
-          <div className="text-[12px] text-zinc-500">Network cost per payout</div>
-          {cost?.payouts ? (
-            <>
-              <div className="mt-1 text-[26px] font-semibold tracking-tight tabular-nums text-zinc-900">
-                {((cost.cost_share ?? 0) * 100).toFixed(2)}%
-              </div>
-              <div className="text-[12px] text-zinc-500">of the amount delivered · ≈ ${(cost.avg_fee_usd ?? 0).toFixed(3)} each</div>
-              <ul className="mt-4 flex flex-col gap-2 text-[12px]">
-                {bars.map(([label, v, color]) => (
-                  <li key={label} className="grid grid-cols-[6.5rem_1fr_2.75rem] items-center gap-2">
-                    <span className="text-zinc-500">{label}</span>
-                    <span className="h-1.5 rounded-full bg-zinc-100">
-                      <span className={`block h-full rounded-full ${color}`} style={{ width: `${((v ?? 0) / scale) * 100}%`, minWidth: 3 }} />
-                    </span>
-                    <span className="text-right font-medium tabular-nums">{((v ?? 0) * 100).toFixed(label === "AidFlow" ? 2 : 1)}%</span>
-                  </li>
-                ))}
-              </ul>
-              <p className="mt-3 text-[11px] leading-relaxed text-zinc-400">
-                Fees actually charged on Testnet (payment + registry), at ${cost.xlm_usd?.toFixed(2)}/XLM. Excludes cash-out.
-              </p>
-            </>
-          ) : <p className="mt-2 text-[13px] text-zinc-500">{cost ? "No payouts yet." : "Reading fees from Stellar…"}</p>}
-        </section>
-
-        <section className="border-zinc-100 px-5 py-4 lg:border-l">
-          <div className="text-[12px] text-zinc-500">Last mile · sent but not yet received</div>
-          <div className={`mt-1 text-[26px] font-semibold tracking-tight tabular-nums ${overdue ? "text-rose-600" : "text-zinc-900"}`}>{d.unclaimed.length}</div>
-          <div className="text-[12px] text-zinc-500">
-            {overdue ? `${overdue} waiting over ${formatHours(d.alert_hours)}: follow up` : `none waiting over ${formatHours(d.alert_hours)}`}
-          </div>
-          {d.unclaimed.length > 0 ? (
-            <ul className="mt-4 divide-y divide-zinc-100 border-t border-zinc-100 text-[13px]">
-              {d.unclaimed.slice(0, 3).map((u) => (
-                <li key={u.request_ref} className="flex items-center justify-between gap-2 py-2">
-                  <Link href={`/requests/${encodeURIComponent(u.request_ref)}`} className="truncate font-mono text-[12px] hover:underline">{u.request_ref}</Link>
-                  <span className="shrink-0 tabular-nums text-zinc-500">{formatAmount(u.amount)}</span>
-                  <span className={`shrink-0 text-[12px] tabular-nums ${u.overdue ? "font-medium text-rose-600" : "text-zinc-500"}`}>{formatHours(u.waiting_hours)}</span>
-                </li>
-              ))}
-            </ul>
-          ) : <p className="mt-4 border-t border-zinc-100 pt-3 text-[13px] text-zinc-500">Everything sent has been received.</p>}
-          <p className="mt-3 text-[11px] leading-relaxed text-zinc-400">Arrival is the start: unclaimed money is tracked, and the NGO can reclaim it after 30 days.</p>
-        </section>
+        ))}
       </div>
     </Card>
   );
