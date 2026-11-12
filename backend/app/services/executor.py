@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import sqlite3
 
-from .. import db, registry, soroban, stellar_client as sc
+from .. import config, db, registry, soroban, stellar_client as sc
 from ..db import Status
 
 
@@ -77,7 +77,8 @@ def settle_registry(conn: sqlite3.Connection, ref: str, status: str) -> None:
 def _reserve(conn: sqlite3.Connection, row: dict) -> dict | None:
     """Reserve the registry key. Returns a result dict if the request must NOT be paid now."""
     ref = row["request_ref"]
-    key = registry.key_for(row["beneficiary_id"], row["batch_id"])
+    key = (bytes.fromhex(row["registry_key"]) if row["registry_key"]
+           else registry.key_for(row["beneficiary_id"], row["batch_id"], row["payout_slot"]))
     conn.execute("UPDATE requests SET registry_key = ? WHERE request_ref = ?", (key.hex(), ref))
     try:
         outcome, detail = registry.reserve(key, ref)
@@ -87,11 +88,11 @@ def _reserve(conn: sqlite3.Connection, row: dict) -> dict | None:
         return {"request_ref": ref, "status": "APPROVED", "error": f"registry unavailable: {exc}"[:200]}
 
     if outcome == "BLOCKED":
-        error = (f"on-chain registry refused: {row['beneficiary_id']} already has a payout "
-                 f"({detail.lower()}) in batch {row['batch_id']}")
+        error = (f"on-chain registry refused: payout slot {row['payout_slot']} for "
+                 f"{row['beneficiary_id']} in batch {row['batch_id']} is {detail.lower()}")
         conn.execute("UPDATE requests SET status = ?, registry_status = 'BLOCKED', error = ?,"
                      " updated_at = ? WHERE request_ref = ?", (Status.FAILED, error, db.now(), ref))
-        db.log(conn, ref, "registry_blocked", {"held_by_status": detail})
+        db.log(conn, ref, "registry_blocked", {"held_by_status": detail, "payout_slot": row["payout_slot"]})
         conn.commit()
         return {"request_ref": ref, "status": "FAILED", "error": error}
     if outcome == "ALREADY_PAID":
@@ -136,6 +137,10 @@ def run(conn: sqlite3.Connection, limit: int = 20, batch: str | None = None) -> 
     results = []
     for ref in refs:
         row = db.get(conn, ref)
+        if not use_registry and (row["registry_key"] or row["payout_slot"] != config.DEFAULT_PAYOUT_SLOT):
+            results.append({"request_ref": ref, "status": Status.APPROVED,
+                            "error": "On-chain registry must be configured for this payout"})
+            continue
         if use_registry:
             stop = _reserve(conn, row)
             if stop:

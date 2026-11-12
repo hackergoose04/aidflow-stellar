@@ -68,9 +68,9 @@ Matches the design doc's payment state machine (its VALIDATED / FLAGGED / CLEARE
   screening and ML still work. Keep `PII_HMAC_SECRET` safe and stable.
 - **Delivery method is automatic.** Wallet exists and trusts AIDUSD → Payment.
   Otherwise → Claimable Balance (beneficiary can claim for 30 days, then the NGO can reclaim).
-- **On-chain registry (Plan B).** When `REGISTRY_CONTRACT_ID` is set, every payout is first
-  registered in a Soroban contract under `HMAC(program | batch | beneficiary)`; a second payout
-  for the same person in the same batch is refused on chain. See `contracts/README.md`.
+- **On-chain registry (Plan B).** With the registry enabled, each payout reserves a key for
+  its program, batch, beneficiary and payout slot. CSVs without a slot use `base`. Additional
+  slots configured in `PAYOUT_SLOTS` require individual review and the registry. See `contracts/README.md`.
 - **No double payout.** The tx hash is committed as `SUBMITTED` before the tx is sent, and only
   rows still `APPROVED` can be claimed by the executor. An unclear submit is looked up by hash,
   never resent. A `FAILED` row can be retried because its tx's 30-second time bounds have passed.
@@ -83,8 +83,8 @@ Matches the design doc's payment state machine (its VALIDATED / FLAGGED / CLEARE
 - **ML risk score**: `services/screening.py::ml_score` scores new requests with the model in
   `ml/` (history = all stored requests), stores `risk_score` and adds `ml_high_risk` above the
   tuned threshold. If no model file exists, screening falls back to rules only. See `ml/README.md`.
-- **Rules**: amount above limit, shared wallet, wallet changed, possible duplicate, same person
-  twice in one batch.
+- **Rules**: amount above limit, shared wallet, wallet changed, possible duplicate, repeated
+  payout slot in a batch, and additional payout needing review.
 - **Review** follows the design doc: approve, hold for further review, correct, or reject. A
   correction is re-validated and re-screened, and its old/new values go to the audit trail.
 - Settings (`AMOUNT_LIMIT`, `DUPLICATE_WINDOW_HOURS`, `RECLAIM_AFTER_SECONDS`, `AIDFLOW_DB`)

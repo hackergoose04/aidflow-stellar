@@ -129,6 +129,7 @@ function ReviewRow({ r, note, setNote, disabled, decide }: {
         <dl className="mt-2 grid grid-cols-[5.5rem_1fr] gap-y-1 text-[12px]">
           <dt className="text-zinc-400">Beneficiary</dt><dd className="truncate font-mono text-zinc-700">{r.beneficiary_id}</dd>
           <dt className="text-zinc-400">Batch</dt><dd className="text-zinc-700">{r.batch_id ?? "—"}</dd>
+          <dt className="text-zinc-400">Payout slot</dt><dd className="text-zinc-700">{r.payout_slot}</dd>
           <dt className="text-zinc-400">Wallet</dt><dd className="font-mono text-zinc-700">{shortKey(r.wallet, 6)}</dd>
           <dt className="text-zinc-400">Requested</dt><dd className="text-zinc-700">{formatTime(r.created_at)}</dd>
           <dt className="text-zinc-400">AI risk</dt><dd><RiskBar score={r.risk_score} /></dd>

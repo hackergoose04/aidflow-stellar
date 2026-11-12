@@ -2,7 +2,7 @@
 
 Exact duplicate request_refs are already rejected at ingest. This catches the softer cases:
   * same beneficiary, same amount, within DUPLICATE_WINDOW_HOURS (new ref, same payout)
-  * same beneficiary twice in one disbursement batch (one payout per person per batch)"""
+  * same beneficiary and payout slot twice in one disbursement batch"""
 from __future__ import annotations
 
 import sqlite3
@@ -31,8 +31,8 @@ def flag_duplicates(conn: sqlite3.Connection, refs: list[str]) -> None:
         if row.get("batch_id"):
             same_batch = conn.execute(
                 "SELECT request_ref, created_at FROM requests WHERE beneficiary_id = ?"
-                " AND batch_id = ? AND request_ref != ? AND status NOT IN (?, ?)",
-                (row["beneficiary_id"], row["batch_id"], ref, *INACTIVE)).fetchall()
+                " AND batch_id = ? AND payout_slot = ? AND request_ref != ? AND status NOT IN (?, ?)",
+                (row["beneficiary_id"], row["batch_id"], row["payout_slot"], ref, *INACTIVE)).fetchall()
             for other in same_batch:
                 if (row["created_at"], ref) > (other["created_at"], other["request_ref"]):
                     db.add_flags(conn, ref, [f"same_batch_as:{other['request_ref']}"])

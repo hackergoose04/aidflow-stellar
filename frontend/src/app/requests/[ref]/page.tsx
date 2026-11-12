@@ -12,6 +12,7 @@ import {
 
 const FIELDS = [
   ["beneficiary_id", "Beneficiary ID"], ["wallet", "Wallet"], ["amount", "Amount"], ["batch_id", "Batch"],
+  ["payout_slot", "Payout slot"],
   ["created_at", "Requested at (ISO)"],
 ] as const;
 type Field = (typeof FIELDS)[number][0];
@@ -38,7 +39,7 @@ export default function RequestDetail() {
         setReq(r);
         // Beneficiary starts empty: only a token is stored; staff type the real ID to change it.
         setEdit({ beneficiary_id: "", wallet: r.wallet, amount: r.amount ? String(Number(r.amount) || r.amount) : "",
-          batch_id: r.batch_id ?? "", created_at: r.created_at });
+          batch_id: r.batch_id ?? "", payout_slot: r.payout_slot, created_at: r.created_at });
         setError(null);
       }, (e) => setError((e as Error).message));
   }, [id]);
@@ -94,6 +95,7 @@ export default function RequestDetail() {
                 <span className="font-mono text-[12px]">{req.beneficiary_id || "—"}</span>
                 <span className="ml-2 text-[12px] text-zinc-400">pseudonymous token</span>
               </Row>
+              <Row label="Payout slot">{req.payout_slot}</Row>
               <Row label="Wallet">
                 {walletState === "missing" || walletState === "invalid" ? (
                   <>
@@ -131,7 +133,7 @@ export default function RequestDetail() {
                   <RegistryBadge status={req.registry_status} />
                   <span className="ml-2 text-[12px] text-zinc-500">{REGISTRY_STYLE[req.registry_status]?.why}</span>
                   {req.registry_key && (
-                    <div className="mt-1 font-mono text-[11px] text-zinc-400" title="HMAC(program | batch | beneficiary); reveals nothing about the person">
+                    <div className="mt-1 font-mono text-[11px] text-zinc-400" title="Hashed registry key for this payout slot">
                       key {req.registry_key.slice(0, 16)}…
                     </div>
                   )}
@@ -190,8 +192,8 @@ export default function RequestDetail() {
                   </>
                 ) : req.registry_status === "BLOCKED" ? (
                   <p className="text-[13px] leading-relaxed text-zinc-600">
-                    Nothing was sent: the on-chain registry already holds a payout for this person in batch{" "}
-                    <b className="font-medium">{req.batch_id}</b>. A retry would be refused again; a genuinely separate payout belongs in another batch.
+                    Nothing was sent. This beneficiary already has a registered payout in slot{" "}
+                    <b className="font-medium">{req.payout_slot}</b> of batch <b className="font-medium">{req.batch_id}</b>.
                   </p>
                 ) : (
                   <>

@@ -9,7 +9,7 @@ AI-assisted payment monitoring and reconciliation on Stellar (Testnet only).
 | `backend/` | A | FastAPI app; `app/services/` = ingest, dedup, screening, review, executor, verifier, recon |
 | `ml/` | C | Synthetic data, Isolation Forest, evaluation |
 | `frontend/` | D | Next.js dashboard: overview, review, requests, payouts, reconciliation |
-| `contracts/` | B | Soroban payout registry (Plan B): one payout per person per batch, hashes only |
+| `contracts/` | B | Soroban payout registry (Plan B): one payout per approved slot, hashes only |
 | `scripts/` | A | Testnet setup and research spikes |
 | `data/samples/` | C | Sample CSVs everyone builds against |
 | `docs/` | all | Research notes |

@@ -88,7 +88,7 @@ export default function Payouts() {
   return (
     <>
       <PageHeader title="Payouts"
-        subtitle="Each payout is registered on chain first and its transaction hash saved before sending, so neither a human slip nor a network hiccup can pay someone twice."
+        subtitle="Send approved payouts and verify their status. When enabled, the on-chain registry blocks repeat payments in the same payout slot."
         action={<>
           {batches.length > 1 && (
             <select value={batch} onChange={(e) => setBatch(e.target.value)} className="input" disabled={!!busy} title="Pay one batch, or everything approved">

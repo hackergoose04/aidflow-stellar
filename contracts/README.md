@@ -1,17 +1,22 @@
 # AidFlow on-chain payout registry (Plan B)
 
-A Soroban contract that records **hashes only** and never touches money. It guarantees one
-payout per beneficiary per program and batch, even if a reviewer approves a duplicate by
-mistake or the backend runs twice.
+A Soroban contract that records **hashes only** and never touches money. The contract
+accepts only one registration per key. The backend uses the same key for every request for
+the same beneficiary, program, batch and payout slot, even if the request references differ.
 
 ```
-key          = HMAC-SHA256(REGISTRY_SECRET, PROGRAM_ID | batch_id | beneficiary_id)
+base key     = HMAC-SHA256(REGISTRY_SECRET, PROGRAM_ID | batch_id | beneficiary_id)
                (PROGRAM_ID namespaces a programme; scripts/reset_demo.py issues a new one per reset)
 request_hash = SHA-256(request_ref)          (also the payment's memo)
 ```
 
 The HMAC secret stays in `.env`, so the chain shows no beneficiary IDs, and nobody can test
 guesses of IDs against it. The payment itself stays a normal Stellar Payment or Claimable Balance.
+
+Existing requests and CSVs without a `payout_slot` use `base` and keep the original key format.
+To allow a separate payment in the same batch, configure e.g. `PAYOUT_SLOTS=base,medical_supplement`
+and include `medical_supplement` in the CSV's `payout_slot` column. Extra slots go through individual
+review and use a key that also includes the slot. The same deployed contract accepts both key formats.
 
 | Function | Who | What |
 | --- | --- | --- |

@@ -8,7 +8,8 @@ Regenerate with `python scripts/make_sample_csv.py`.
 | Field | Type | Meaning | Example |
 | --- | --- | --- | --- |
 | `request_ref` | string, unique | Internal request ID. On chain only its SHA-256 appears (memo). | `REQ-0001` |
-| `batch_id` | string, optional | Disbursement batch. One payout per person per batch. If the column is missing, each upload becomes its own batch. | `BATCH-01` |
+| `batch_id` | string, optional | Disbursement batch. If omitted, the upload gets its own batch. Reuse the batch ID for the same program batch. | `BATCH-01` |
+| `payout_slot` | string, optional | Authorized payout within the batch. Defaults to `base`. Configure extra slot IDs with `PAYOUT_SLOTS`; each extra payout needs individual review and the on-chain registry. Reuse the slot on reupload and retry. | `medical_supplement` |
 | `beneficiary_id` | string | Internal beneficiary ID. Never sent on chain. | `BEN-017` |
 | `wallet` | Stellar public key | Where the money goes (`G...`, 56 chars) | `GDD4...LSJN` |
 | `amount` | decimal > 0 | Amount in `asset` | `50` |

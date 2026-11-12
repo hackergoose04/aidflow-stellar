@@ -3,12 +3,17 @@ No network needed.  Run from the repo root:  pytest backend/tests"""
 from __future__ import annotations
 
 import csv
+import hmac
+import sqlite3
+from types import SimpleNamespace
 
 import pytest
 from fastapi.testclient import TestClient
+from stellar_sdk import Account, Keypair, scval
 
-from backend.app import config
+from backend.app import config, registry, stellar_client as sc
 from backend.app.main import app
+from backend.app.services import screening
 
 SAMPLE = config.ROOT / "data" / "samples" / "requests.csv"
 LABELS = config.ROOT / "data" / "samples" / "requests_labels.csv"
@@ -127,6 +132,103 @@ def test_same_batch_rule_and_default_batch(client):
     assert not any(f.startswith("same_batch") for f in client.get("/requests/B-1").json()["flags"])
     # No batch_id given: the upload becomes its own batch.
     assert client.get("/requests/B-3").json()["batch_id"].startswith("UPLOAD-")
+
+
+def test_approved_slots_pay_separately_but_cannot_pay_twice(client, monkeypatch):
+    monkeypatch.setattr(config, "PAYOUT_SLOTS", {"base", "medical_supplement"})
+    monkeypatch.setattr(screening.ml, "score_frame", lambda _: None)
+    monkeypatch.setenv("DISTRIBUTION_SECRET", Keypair.random().secret)
+    monkeypatch.setenv("ISSUER_PUBLIC", Keypair.random().public_key)
+    monkeypatch.setenv("REGISTRY_CONTRACT_ID", "test-registry")
+    monkeypatch.setenv("REGISTRY_SECRET", "test-registry-secret")
+    wallet = Keypair.random().public_key
+    csv_text = (
+        "request_ref,batch_id,payout_slot,beneficiary_id,wallet,amount,asset,created_at\n"
+        f"R-1,BATCH-X,,BEN-1,{wallet},50,AIDUSD,2026-11-01T10:00:00Z\n"
+        f"R-2,BATCH-X,medical_supplement,BEN-1,{wallet},20,AIDUSD,2026-11-01T11:00:00Z\n"
+        f"R-3,BATCH-X, Medical_Supplement ,BEN-1,{wallet},20,AIDUSD,2026-11-01T12:00:00Z\n"
+    )
+    assert upload(client, csv_text).json()["accepted"] == 3
+    assert client.get("/requests/R-1").json()["payout_slot"] == "base"
+    assert client.get("/requests/R-2").json()["flags"] == ["additional_payout:medical_supplement"]
+    assert "same_batch_as:R-2" in client.get("/requests/R-3").json()["flags"]
+    assert client.post("/review/approve-clean", json={"reviewer": "alice"}).json()["request_refs"] == ["R-1"]
+    for ref in ("R-2", "R-3"):
+        assert client.post(f"/requests/{ref}/approve", json={"reviewer": "alice"}).status_code == 200
+
+    # Replace network I/O while exercising the real registry client and payout executor.
+    entries, payments = {}, []
+
+    def call(function, raw_key, raw_value):
+        key, value = scval.from_bytes(raw_key), scval.from_bytes(raw_value)
+        if function == "register":
+            assert key not in entries
+            entries[key] = {"request_hash": value, "status": "Reserved"}
+        else:
+            assert function == "mark_paid"
+            entries[key].update(status="Paid", tx_hash=value.hex())
+        return "a" * 64
+
+    def submit(tx):
+        payments.append(tx.hash_hex())
+        return "CONFIRMED", None
+
+    monkeypatch.setattr(registry, "get", entries.get)
+    monkeypatch.setattr(registry, "_call", call)
+    monkeypatch.setattr(sc, "has_trustline", lambda *_: True)
+    monkeypatch.setattr(sc, "horizon", lambda: SimpleNamespace(
+        load_account=lambda key: Account(key, len(payments))))
+    monkeypatch.setattr(sc, "submit", submit)
+    result = client.post("/payouts/run").json()
+    assert {r["request_ref"]: r["status"] for r in result} == {
+        "R-1": "CONFIRMED", "R-2": "CONFIRMED", "R-3": "FAILED",
+    }
+    assert len(entries) == len(payments) == 2
+    base, supplement, repeated = (client.get(f"/requests/{ref}").json()
+                                  for ref in ("R-1", "R-2", "R-3"))
+    assert base["registry_key"] != supplement["registry_key"] == repeated["registry_key"]
+    assert repeated["registry_status"] == "BLOCKED" and repeated["tx_hash"] is None
+
+
+def test_payout_slot_migration_preserves_old_registry_key(client, monkeypatch):
+    monkeypatch.setenv("PROGRAM_ID", "PROGRAM")
+    monkeypatch.setenv("REGISTRY_SECRET", "secret")
+    wallet = Keypair.random().public_key
+    upload(client, "request_ref,batch_id,beneficiary_id,wallet,amount,asset,created_at\n"
+                   f"OLD,BATCH-X,BEN-1,{wallet},50,AIDUSD,2026-11-01T10:00:00Z\n")
+    beneficiary = client.get("/requests/OLD").json()["beneficiary_id"]
+    legacy_key = hmac.digest(b"secret", f"PROGRAM|BATCH-X|{beneficiary}".encode(), "sha256")
+    with sqlite3.connect(config.DB_PATH) as conn:
+        conn.execute("UPDATE requests SET registry_key = ?, registry_status = 'PAID' WHERE request_ref = 'OLD'",
+                     (legacy_key.hex(),))
+        conn.execute("ALTER TABLE requests DROP COLUMN payout_slot")
+    row = client.get("/requests/OLD").json()
+    assert row["registry_status"] == "PAID" and row["registry_key"] == legacy_key.hex()
+    assert row["payout_slot"] == "base"
+    assert registry.key_for(beneficiary, "BATCH-X", row["payout_slot"]) == legacy_key
+
+
+def test_unknown_slots_are_rejected_and_extra_slots_require_registry(client, monkeypatch):
+    monkeypatch.setattr(config, "PAYOUT_SLOTS", {"base", "medical_supplement"})
+    wallet = Keypair.random().public_key
+    report = upload(client, "request_ref,batch_id,payout_slot,beneficiary_id,wallet,amount,asset,created_at\n"
+                            f"R-1,BATCH-X,arbitrary,BEN-1,{wallet},20,AIDUSD,2026-11-01T10:00:00Z\n").json()
+    assert report["rejected"][0]["reasons"] == ["unsupported_payout_slot"]
+    row = client.post("/requests/R-1/correct", json={
+        "reviewer": "alice", "payout_slot": "medical_supplement",
+    }).json()
+    assert row["payout_slot"] == "medical_supplement" and row["status"] == "PENDING_REVIEW"
+    assert "additional_payout:medical_supplement" in row["flags"]
+    assert client.post("/requests/R-1/approve", json={"reviewer": "alice"}).status_code == 200
+
+    monkeypatch.delenv("REGISTRY_CONTRACT_ID", raising=False)
+    monkeypatch.setenv("DISTRIBUTION_SECRET", Keypair.random().secret)
+    monkeypatch.setenv("ISSUER_PUBLIC", Keypair.random().public_key)
+    monkeypatch.setattr(sc, "horizon", lambda: None)
+    result = client.post("/payouts/run").json()
+    assert result == [{"request_ref": "R-1", "status": "APPROVED",
+                       "error": "On-chain registry must be configured for this payout"}]
+    assert client.get("/requests/R-1").json()["tx_hash"] is None
 
 
 def test_beneficiary_ids_are_never_stored_raw(client):

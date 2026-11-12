@@ -59,7 +59,9 @@ export function describeFlag(flag: string): FlagInfo {
     case "possible_duplicate_of":
       return { label: "Possible duplicate", detail: `Same person and amount within 24 h as ${value}`, source: "rule" };
     case "same_batch_as":
-      return { label: "Repeat in batch", detail: `Same person already has a request in this batch: ${value}`, source: "rule" };
+      return { label: "Repeated payout slot", detail: `Same person and payout slot in this batch: ${value}`, source: "rule" };
+    case "additional_payout":
+      return { label: "Additional payout", detail: `Review the ${value} payout separately`, source: "rule" };
     case "wallet_changed":
       return { label: "Wallet changed", detail: "Earlier requests used a different wallet", source: "rule" };
     case "invalid":
@@ -116,7 +118,7 @@ export const REGISTRY_STYLE: Record<string, { label: string; dot: string; why: s
   RELEASED: { label: "Released", dot: "#a1a1aa",
     why: "The payment failed, so the reservation was freed for a retry." },
   BLOCKED: { label: "Blocked on chain", dot: "#e11d48",
-    why: "The registry refused: this person already has a payout in this batch." },
+    why: "The registry already holds a payout in this person's slot for the batch." },
 };
 
 export const CLAIM_STYLE: Record<string, { label: string; dot: string; why: string }> = {

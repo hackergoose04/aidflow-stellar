@@ -16,7 +16,7 @@ from ..db import Status
 from . import dedup, screening
 
 REQUIRED = ["request_ref", "beneficiary_id", "wallet", "amount", "asset", "created_at"]
-OPTIONAL = ["batch_id"]  # disbursement batch; if absent, the whole upload is one batch
+OPTIONAL = ["batch_id", "payout_slot"]
 SEVEN_DP = Decimal("0.0000001")
 
 
@@ -51,6 +51,8 @@ def validate(row: dict) -> list[str]:
         errors.append("invalid_amount")
     if row["asset"].strip() != config.ASSET_CODE:
         errors.append("unsupported_asset")
+    if row.get("payout_slot", config.DEFAULT_PAYOUT_SLOT) not in config.PAYOUT_SLOTS:
+        errors.append("unsupported_payout_slot")
     try:
         parse_time(row["created_at"])
     except ValueError:
@@ -77,6 +79,8 @@ def ingest_csv(conn: sqlite3.Connection, text: str) -> dict:
         if existing:  # an earlier INVALID version of this ref: this upload replaces it
             conn.execute("DELETE FROM requests WHERE request_ref = ?", (ref,))
         batch = (row.get("batch_id") or "").strip() or upload_batch
+        slot = (row.get("payout_slot") or "").strip().lower() or config.DEFAULT_PAYOUT_SLOT
+        row["payout_slot"] = slot
         ben = identity.pseudonymize(row.get("beneficiary_id") or "")
         errors = validate(row)
         if errors:
@@ -89,17 +93,18 @@ def ingest_csv(conn: sqlite3.Connection, text: str) -> dict:
                 except ValueError:
                     created = (row.get("created_at") or "").strip()
                 conn.execute(
-                    "INSERT INTO requests (request_ref, batch_id, beneficiary_id, wallet, amount, asset,"
-                    " created_at, status, flags, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-                    (ref, batch, ben, (row.get("wallet") or "").strip(), (row.get("amount") or "").strip(),
+                    "INSERT INTO requests (request_ref, batch_id, payout_slot, beneficiary_id, wallet,"
+                    " amount, asset, created_at, status, flags, updated_at)"
+                    " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                    (ref, batch, slot, ben, (row.get("wallet") or "").strip(), (row.get("amount") or "").strip(),
                      (row.get("asset") or "").strip(), created, Status.INVALID,
                      json.dumps([f"invalid:{e}" for e in errors]), db.now()))
             continue
         seen.add(ref)
         conn.execute(
-            "INSERT INTO requests (request_ref, batch_id, beneficiary_id, wallet, amount, asset,"
-            " created_at, status, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
-            (ref, batch, ben, row["wallet"].strip(), normalize_amount(row["amount"]),
+            "INSERT INTO requests (request_ref, batch_id, payout_slot, beneficiary_id, wallet,"
+            " amount, asset, created_at, status, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (ref, batch, slot, ben, row["wallet"].strip(), normalize_amount(row["amount"]),
              row["asset"].strip(), parse_time(row["created_at"]), Status.PENDING_REVIEW, db.now()))
         accepted.append(ref)
 

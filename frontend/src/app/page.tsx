@@ -169,7 +169,7 @@ export default function Overview() {
                         </div>
                       ))}
                     </div>
-                    <p className="mt-3 text-[12px] leading-relaxed text-zinc-500">One payout per person per batch, enforced on chain. Stores hashes only.</p>
+                    <p className="mt-3 text-[12px] leading-relaxed text-zinc-500">Blocks repeat payments in the same payout slot.</p>
                   </dd>
                 </div>
               )}

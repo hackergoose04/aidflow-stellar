@@ -19,6 +19,8 @@ def screen(conn: sqlite3.Connection, refs: list[str]) -> None:
     for ref in refs:
         row = db.get(conn, ref)
         flags = []
+        if row["payout_slot"] != config.DEFAULT_PAYOUT_SLOT:
+            flags.append(f"additional_payout:{row['payout_slot']}")
         if Decimal(row["amount"]) > config.AMOUNT_LIMIT:
             flags.append(f"amount_above_limit:{config.AMOUNT_LIMIT}")
         sharing = conn.execute(
