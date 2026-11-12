@@ -5,19 +5,35 @@ Pipeline: upload CSV -> dedup + screening flags -> human review -> pay -> verify
 from __future__ import annotations
 
 import json
+import logging
 import os
 import sqlite3
 from collections.abc import Iterator
 
 from fastapi import Depends, FastAPI, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel
+from fastapi.responses import JSONResponse
+from pydantic import BaseModel, StringConstraints
+from typing import Annotated
 
 from . import config, db, identity, public, registry, stellar_client as sc
 from .db import Status
-from .services import claims, executor, ingest, recon, review, verifier
+from .services import claims, delivery, executor, ingest, recon, review, verifier
 
 app = FastAPI(title="AidFlow", description="Aid payout monitoring and reconciliation on Stellar Testnet")
+
+
+# Registered before CORS so it sits inside it: an unexpected error becomes a JSON 500 that still
+# carries CORS headers, so the browser shows the message instead of "can't reach the backend".
+@app.middleware("http")
+async def json_errors(request, call_next):
+    try:
+        return await call_next(request)
+    except Exception as exc:  # noqa: BLE001
+        logging.getLogger("aidflow").exception("unhandled error on %s", request.url.path)
+        return JSONResponse(status_code=500, content={"detail": f"{type(exc).__name__}: {exc}"[:300]})
+
+
 app.add_middleware(
     CORSMiddleware,
     allow_origins=os.getenv("CORS_ORIGINS", "http://localhost:3000,http://127.0.0.1:3000").split(","),
@@ -36,13 +52,17 @@ def get_conn() -> Iterator[sqlite3.Connection]:
         conn.close()
 
 
+# A decision always names the person who made it: the audit trail is only worth something then.
+Reviewer = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1)]
+
+
 class Decision(BaseModel):
-    reviewer: str
+    reviewer: Reviewer
     note: str | None = None
 
 
 class Correction(BaseModel):
-    reviewer: str
+    reviewer: Reviewer
     note: str | None = None
     beneficiary_id: str | None = None  # real ID; stored only as its HMAC token
     wallet: str | None = None
@@ -86,6 +106,19 @@ def summary(conn: sqlite3.Connection = Depends(get_conn)) -> dict:
         reg[r["registry_status"]] = r["n"]
     return {"by_status": counts, "pending_flagged": flagged, "recon": recon_counts, "registry": reg,
             "last_recon": last_recon, "batches": batches, "risk_histogram": hist}
+
+
+@app.get("/delivery")
+def delivery_metrics(conn: sqlite3.Connection = Depends(get_conn)) -> dict:
+    """Decision -> money in hand, and payouts still waiting for the beneficiary (last mile)."""
+    return {"timing": delivery.timing(conn), "unclaimed": delivery.unclaimed(conn),
+            "alert_hours": config.CLAIM_ALERT_HOURS}
+
+
+@app.get("/delivery/cost")
+def delivery_cost(conn: sqlite3.Connection = Depends(get_conn)) -> dict:
+    """Network fees actually charged per payout (reads Horizon, so kept off /summary)."""
+    return delivery.cost(conn)
 
 
 @app.get("/wallet")
@@ -220,8 +253,9 @@ def approve_clean(body: Decision, conn: sqlite3.Connection = Depends(get_conn)) 
 
 
 @app.post("/payouts/run")
-def run_payouts(limit: int = 20, conn: sqlite3.Connection = Depends(get_conn)) -> list[dict]:
-    return executor.run(conn, limit)
+def run_payouts(limit: int = 20, batch: str | None = None, conn: sqlite3.Connection = Depends(get_conn)) -> list[dict]:
+    """Pay approved requests, oldest first. `batch` pays one disbursement batch only."""
+    return executor.run(conn, limit, batch)
 
 
 @app.post("/payouts/verify")

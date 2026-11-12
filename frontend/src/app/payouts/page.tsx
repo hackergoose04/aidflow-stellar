@@ -2,25 +2,50 @@
 
 import Link from "next/link";
 import { Fragment, useCallback, useEffect, useState } from "react";
-import { get, post, type AidRequest, type ClaimResult, type PayoutResult, type VerifyResult } from "@/lib/api";
-import { formatAmount, formatTime } from "@/lib/format";
-import { Button, Card, ClaimBadge, Empty, ErrorNote, Notice, PageHeader, RegistryBadge, Stats, StatusBadge, TxLink } from "@/components/ui";
+import { get, payAll, post, type AidRequest, type ClaimResult, type Delivery, type VerifyResult } from "@/lib/api";
+import { formatAmount, formatHours, formatTime, STATUS_STYLE } from "@/lib/format";
+import { Button, Card, ClaimBadge, Empty, ErrorNote, Notice, PageHeader, RegistryBadge, Stats, TxLink } from "@/components/ui";
 
 const PAID_STATES = new Set(["SUBMITTED", "CONFIRMED", "CLAIMED", "FAILED", "UNKNOWN"]);
 
+function PaymentStatus({ request }: { request: AidRequest }) {
+  const tone = request.status === "CONFIRMED" || request.status === "CLAIMED"
+    ? "border-emerald-200 bg-emerald-50 text-emerald-800"
+    : request.status === "FAILED"
+      ? "border-rose-200 bg-rose-50 text-rose-700"
+      : request.status === "UNKNOWN"
+        ? "border-amber-200 bg-amber-50 text-amber-800"
+        : "border-indigo-200 bg-indigo-50 text-indigo-800";
+  const method = request.method === "payment" ? "Direct payment"
+    : request.method === "claimable_balance" ? "Claimable balance" : null;
+
+  return (
+    <div className="flex min-w-[150px] flex-col items-start gap-1">
+      <span className={`inline-flex h-[22px] items-center whitespace-nowrap rounded-md border px-1.5 text-[12px] font-medium ${tone}`}>
+        {STATUS_STYLE[request.status].label}
+      </span>
+      {method && <span className="text-[11px] text-zinc-500">{method}</span>}
+    </div>
+  );
+}
+
 export default function Payouts() {
   const [rows, setRows] = useState<AidRequest[] | null>(null);
-  const [approved, setApproved] = useState(0);
+  const [approvedRows, setApprovedRows] = useState<AidRequest[]>([]);
+  const [batch, setBatch] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
   const [message, setMessage] = useState<string | null>(null);
+  const [delivery, setDelivery] = useState<Delivery | null>(null);
+  const [progress, setProgress] = useState("");
 
   const load = useCallback(async () => {
     try {
       const all = await get<AidRequest[]>("/requests");
       setRows(all.filter((r) => PAID_STATES.has(r.status))
         .sort((a, b) => Date.parse(b.submitted_at ?? b.updated_at) - Date.parse(a.submitted_at ?? a.updated_at)));
-      setApproved(all.filter((r) => r.status === "APPROVED").length);
+      setApprovedRows(all.filter((r) => r.status === "APPROVED"));
+      get<Delivery>("/delivery").then(setDelivery, () => setDelivery(null));
       setError(null);
     } catch (e) {
       setError((e as Error).message);
@@ -33,7 +58,9 @@ export default function Payouts() {
     setMessage(null);
     try {
       if (kind === "pay") {
-        const r = await post<PayoutResult[]>("/payouts/run");
+        const total = approved;
+        setProgress(`0 of ${total}`);
+        const r = await payAll(async (done) => { setProgress(`${Math.min(done, total)} of ${total}`); await load(); }, batch);
         const ok = r.filter((x) => x.status === "CONFIRMED").length;
         setMessage(r.length ? `Sent ${r.length} payouts: ${ok} confirmed, ${r.length - ok} need attention.` : "Nothing approved to pay.");
       } else {
@@ -53,21 +80,37 @@ export default function Payouts() {
   }
 
   const count = (s: string) => rows?.filter((r) => r.status === s).length ?? 0;
+  const batches = [...new Set(approvedRows.map((r) => r.batch_id ?? ""))].sort().reverse();  // newest batch first
+  const approved = approvedRows.filter((r) => !batch || r.batch_id === batch).length;
+  const waiting = new Map(delivery?.unclaimed.map((u) => [u.request_ref, u]) ?? []);
+  const overdue = delivery?.unclaimed.filter((u) => u.overdue) ?? [];
 
   return (
     <>
       <PageHeader title="Payouts"
         subtitle="Send approved payouts and verify their status. When enabled, the on-chain registry blocks repeat payments in the same payout slot."
         action={<>
+          {batches.length > 1 && (
+            <select value={batch} onChange={(e) => setBatch(e.target.value)} className="input" disabled={!!busy} title="Pay one batch, or everything approved">
+              <option value="">All batches · {approvedRows.length}</option>
+              {batches.map((b) => <option key={b} value={b}>{b} · {approvedRows.filter((r) => (r.batch_id ?? "") === b).length}</option>)}
+            </select>
+          )}
           <Button variant="secondary" disabled={!!busy} onClick={() => run("verify")}>
             {busy === "verify" ? "Checking…" : "Verify & check claims"}
           </Button>
           <Button disabled={!!busy || !approved} onClick={() => run("pay")}>
-            {busy === "pay" ? "Paying…" : `Pay ${approved} approved`}
+            {busy === "pay" ? `Paying ${progress}…` : `Pay ${approved} approved`}
           </Button>
         </>} />
       <ErrorNote error={error} />
       {message && <Notice tone="success">{message}</Notice>}
+      {overdue.length > 0 && (
+        <Notice tone="warning">
+          {overdue.length} payout{overdue.length > 1 ? "s have" : " has"} waited over {formatHours(delivery!.alert_hours)} without being claimed.
+          Contact the beneficiary: the money arrived but hasn&apos;t reached them.
+        </Notice>
+      )}
 
       <Stats items={[
         { label: "Confirmed", value: count("CONFIRMED"), hint: "in wallet or awaiting claim" },
@@ -90,7 +133,7 @@ export default function Payouts() {
                   <th>Ref</th>
                   <th>Beneficiary</th>
                   <th className="text-right">Amount</th>
-                  <th>Status</th>
+                  <th>Payment</th>
                   <th>Delivery</th>
                   <th>Registry</th>
                   <th>Sent</th>
@@ -106,8 +149,15 @@ export default function Payouts() {
                     </td>
                     <td className="whitespace-nowrap font-mono text-[12px] text-zinc-500">{r.beneficiary_id}</td>
                     <td className="text-right font-medium tabular-nums">{formatAmount(r.amount)}</td>
-                    <td><StatusBadge status={r.status} /></td>
-                    <td>{(r.status === "CONFIRMED" || r.status === "CLAIMED") ? <ClaimBadge method={r.method} status={r.claim_status} /> : <span className="text-[12px] text-zinc-300">—</span>}</td>
+                    <td><PaymentStatus request={r} /></td>
+                    <td className="whitespace-nowrap">
+                      {(r.status === "CONFIRMED" || r.status === "CLAIMED") ? <ClaimBadge method={r.method} status={r.claim_status} /> : <span className="text-[12px] text-zinc-300">—</span>}
+                      {waiting.get(r.request_ref) && (
+                        <span className={`ml-2 text-[12px] tabular-nums ${waiting.get(r.request_ref)!.overdue ? "font-medium text-rose-600" : "text-zinc-400"}`}>
+                          {formatHours(waiting.get(r.request_ref)!.waiting_hours)}
+                        </span>
+                      )}
+                    </td>
                     <td><RegistryBadge status={r.registry_status} /></td>
                     <td className="whitespace-nowrap text-[12px] text-zinc-500">{formatTime(r.submitted_at)}</td>
                     <td className="whitespace-nowrap"><TxLink hash={r.tx_hash} /></td>

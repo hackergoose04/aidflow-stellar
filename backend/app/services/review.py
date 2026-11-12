@@ -61,17 +61,17 @@ def correct(conn: sqlite3.Connection, ref: str, changes: dict, reviewer: str,
         changes["beneficiary_id"] = identity.pseudonymize(changes["beneficiary_id"])
     if "payout_slot" in changes:
         changes["payout_slot"] = changes["payout_slot"].lower() or config.DEFAULT_PAYOUT_SLOT
-    changes = {k: v for k, v in changes.items() if v != (row[k] or "")}
-    if not changes:
-        raise ValueError("nothing to change")
-    merged = {**row, **changes}
-    errors = ingest.validate(merged)
+    errors = ingest.validate({**row, **changes})
     if errors:
         raise ValueError(f"invalid correction: {', '.join(errors)}")
+    # Compare in stored form, so "150" against "150.0000000" is not a change.
     if "amount" in changes:
         changes["amount"] = ingest.normalize_amount(changes["amount"])
     if "created_at" in changes:
         changes["created_at"] = ingest.parse_time(changes["created_at"])
+    changes = {k: v for k, v in changes.items() if v != (row[k] or "")}
+    if not changes:
+        raise ValueError("nothing to change")
     sets = ", ".join(f"{k} = ?" for k in changes)
     updated = conn.execute(f"UPDATE requests SET {sets}, status = ?, flags = '[]', risk_score = NULL,"
                            " reviewer = ?, note = ?, updated_at = ?"
@@ -80,6 +80,7 @@ def correct(conn: sqlite3.Connection, ref: str, changes: dict, reviewer: str,
                             ref, row["status"], row["updated_at"]))
     if updated.rowcount != 1:
         raise ValueError(f"{ref} changed during review; reload it before correcting")
+    # An INVALID record that now passes validation joins the normal flow.
     if row["status"] == Status.INVALID:
         db.log(conn, ref, "validated", {"reviewer": reviewer})
     db.log(conn, ref, "corrected", {"reviewer": reviewer, "note": note,

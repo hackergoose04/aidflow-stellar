@@ -89,23 +89,36 @@ def now() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
+_migrated: set[str] = set()  # DB paths already migrated by this process
+
+
 def connect() -> sqlite3.Connection:
     config.DB_PATH.parent.mkdir(parents=True, exist_ok=True)
-    conn = sqlite3.connect(config.DB_PATH, check_same_thread=False)
+    # Every request opens its own connection, and the UI fires several at once. WAL lets readers
+    # and writers proceed together; the busy timeout covers the brief moments they can't.
+    conn = sqlite3.connect(config.DB_PATH, check_same_thread=False, timeout=10)
     conn.row_factory = sqlite3.Row
+    conn.execute("PRAGMA journal_mode=WAL")
+    conn.execute("PRAGMA busy_timeout=10000")
+    # Missing columns are checked on every connection (a cheap read); the status rename and the
+    # schema script, which write, run once per process.
     existing = {r["name"] for r in conn.execute("PRAGMA table_info(requests)")}
-    if existing:
-        if MIGRATIONS.keys() - existing:
-            # A second request may be migrating the database at the same time.
-            conn.execute("BEGIN IMMEDIATE")
-            existing = {r["name"] for r in conn.execute("PRAGMA table_info(requests)")}
-            for col, typ in MIGRATIONS.items():
-                if col not in existing:
-                    conn.execute(f"ALTER TABLE requests ADD COLUMN {col} {typ}")
-        for old, new in RENAMED.items():
-            conn.execute("UPDATE requests SET status = ? WHERE status = ?", (new, old))
+    if existing and MIGRATIONS.keys() - existing:
+        # A second request may be migrating the database at the same time.
+        conn.execute("BEGIN IMMEDIATE")
+        existing = {r["name"] for r in conn.execute("PRAGMA table_info(requests)")}
+        for col, typ in MIGRATIONS.items():
+            if col not in existing:
+                conn.execute(f"ALTER TABLE requests ADD COLUMN {col} {typ}")
         conn.commit()
-    conn.executescript(SCHEMA)
+    key = str(config.DB_PATH)
+    if key not in _migrated:
+        if existing:
+            for old, new in RENAMED.items():
+                conn.execute("UPDATE requests SET status = ? WHERE status = ?", (new, old))
+            conn.commit()
+        conn.executescript(SCHEMA)
+        _migrated.add(key)
     return conn
 
 

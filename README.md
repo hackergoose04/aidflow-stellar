@@ -63,6 +63,7 @@ Details: [contracts/README.md](contracts/README.md).
 python scripts/reset_demo.py        # back up the database, start fresh with the sample batch
 python scripts/make_demo_csv.py     # small live batch paying your own Testnet accounts
 python scripts/beneficiary_claim.py # after paying demo_live.csv: BEN-CAROL claims her money -> CLAIMED
+python scripts/make_demo_csv.py --carol G...  # BEN-CAROL = your own wallet: claim it on /claim with Freighter
 python scripts/claim_demo.py        # self-contained CLAIMED demo on a throwaway database
 ```
 

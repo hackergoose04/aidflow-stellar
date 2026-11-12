@@ -79,6 +79,53 @@ export interface BatchSummary {
   amount: number;
 }
 
+export interface DurationStats { n: number; median_s: number | null; max_s: number | null }
+
+export interface Unclaimed {
+  request_ref: string;
+  batch_id: string | null;
+  amount: string;
+  asset: string;
+  sent_at: string;
+  waiting_hours: number;
+  overdue: boolean;
+  reclaim_from: string;
+}
+
+export interface Delivery {
+  timing: {
+    approved_to_chain: DurationStats;
+    approved_to_hand: DurationStats;
+    submitted_to_chain: DurationStats;
+    not_in_hand_yet: number;
+  };
+  unclaimed: Unclaimed[];
+  alert_hours: number;
+}
+
+export interface DeliveryCost {
+  payouts: number;
+  avg_fee_xlm?: number;
+  avg_payment_fee_xlm?: number;
+  avg_registry_fee_xlm?: number;
+  avg_fee_usd?: number;
+  cost_share?: number;
+  xlm_usd?: number;
+  benchmark?: number;
+  target?: number;
+}
+
+/** A payout waiting for a wallet to claim it (from /public/claimable). */
+export interface PublicClaimable {
+  request_ref: string;
+  batch_id: string | null;
+  amount: string;
+  asset: string;
+  balance_id: string | null;
+  paid_at: string | null;
+  explorer: string | null;
+}
+
 export interface Summary {
   by_status: Record<Status, number>;
   pending_flagged: number;
@@ -161,6 +208,21 @@ export interface PublicSummary {
   registry_contract: string | null;
   registry_explorer: string | null;
   horizon_url: string;
+}
+
+/** Pay approved requests a few at a time, so the caller can refresh the table and show progress.
+ *  Each payout is three Testnet transactions (register, pay, mark paid), roughly 15 s. */
+export async function payAll(onChunk: (done: number) => void | Promise<void>, batch = "", chunk = 5): Promise<PayoutResult[]> {
+  const all: PayoutResult[] = [];
+  const q = batch ? `&batch=${encodeURIComponent(batch)}` : "";
+  for (;;) {
+    const r = await post<PayoutResult[]>(`/payouts/run?limit=${chunk}${q}`);
+    all.push(...r);
+    // Stop when nothing is left, or when nothing moved (registry unreachable leaves them APPROVED).
+    if (!r.length || r.every((x) => x.status === "APPROVED")) break;
+    await onChunk(all.length);
+  }
+  return all;
 }
 
 export interface PayoutResult {

@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { useParams } from "next/navigation";
-import { useCallback, useEffect, useState } from "react";
+import { Fragment, useCallback, useEffect, useState } from "react";
 import { accountState, explorerAccount, get, post, type AidRequest } from "@/lib/api";
 import { CLAIM_STYLE, describeReason, formatAmount, formatTime, REGISTRY_STYLE } from "@/lib/format";
 import {
@@ -171,7 +171,7 @@ export default function RequestDetail() {
           {(open || invalid || req.status === "FAILED") && (
             <Card title={decisionTitle}>
               <div className="flex flex-col gap-2">
-                <ReviewerInput value={reviewer} onChange={setReviewer} compact />
+                {req.registry_status !== "BLOCKED" && <ReviewerInput value={reviewer} onChange={setReviewer} compact />}
                 {invalid ? (
                   <>
                     <p className="text-[12px] text-zinc-500">This row failed validation at upload. Fix it, or reject it.</p>
@@ -201,7 +201,7 @@ export default function RequestDetail() {
                     <Button disabled={busy || !reviewer.trim()} onClick={() => act("retry")}>Send back to approved</Button>
                   </>
                 )}
-                {!reviewer.trim() && <p className="text-[12px] text-amber-600">Enter your name under Reviewing as first.</p>}
+                {!reviewer.trim() && req.registry_status !== "BLOCKED" && <p className="text-[12px] text-amber-600">Enter your name under Reviewing as first.</p>}
               </div>
             </Card>
           )}
@@ -219,7 +219,7 @@ export default function RequestDetail() {
                       <span className="text-[13px] font-medium capitalize text-zinc-800">{e.kind.replaceAll("_", " ")}</span>
                       <span className="shrink-0 text-[11px] text-zinc-400">{formatTime(e.at)}</span>
                     </div>
-                    {e.detail && <pre className="mt-1 overflow-x-auto whitespace-pre-wrap break-all rounded bg-zinc-50 px-2 py-1 font-mono text-[11px] text-zinc-500">{e.detail}</pre>}
+                    <EventDetail detail={e.detail} />
                   </li>
                 ))}
               </ol>
@@ -230,6 +230,43 @@ export default function RequestDetail() {
         </div>
       </div>
     </>
+  );
+}
+
+/** Event detail as readable lines instead of raw JSON; a correction shows "field: old → new". */
+function EventDetail({ detail }: { detail: string | null }) {
+  if (!detail) return null;
+  let data: Record<string, unknown>;
+  try {
+    data = JSON.parse(detail);
+  } catch {
+    return <div className="mt-1 break-all font-mono text-[11px] text-zinc-500">{detail}</div>;
+  }
+  const lines: [string, string][] = [];
+  for (const [k, v] of Object.entries(data)) {
+    if (v === null || v === undefined || v === "" || k === "stored_as_invalid") continue;
+    if (k === "changes" && typeof v === "object") {
+      for (const [field, pair] of Object.entries(v as Record<string, [unknown, unknown]>)) {
+        lines.push([field.replaceAll("_", " "), `${pair[0] ?? "—"} → ${pair[1] ?? "—"}`]);
+      }
+    } else if (Array.isArray(v)) {
+      lines.push([k.replaceAll("_", " "), v.map((x) => String(x).replaceAll("_", " ")).join(", ")]);
+    } else if (typeof v === "object") {
+      lines.push([k.replaceAll("_", " "), JSON.stringify(v)]);
+    } else {
+      lines.push([k.replaceAll("_", " "), String(v)]);
+    }
+  }
+  if (!lines.length) return null;
+  return (
+    <dl className="mt-1 grid grid-cols-[auto_1fr] gap-x-3 gap-y-0.5 text-[11px]">
+      {lines.map(([k, v]) => (
+        <Fragment key={k}>
+          <dt className="text-zinc-400">{k}</dt>
+          <dd className={`break-all text-zinc-600 ${/hash|key|tx|balance/.test(k) ? "font-mono" : ""}`}>{v}</dd>
+        </Fragment>
+      ))}
+    </dl>
   );
 }
 

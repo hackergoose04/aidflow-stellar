@@ -44,6 +44,8 @@ Matches the design doc's payment state machine (its VALIDATED / FLAGGED / CLEARE
 | Method | Path | What it does |
 | --- | --- | --- |
 | GET | `/summary` | Counts by status and reconciliation result, batches, risk histogram |
+| GET | `/delivery` | Approval → on chain → money in hand (median times), and payouts still unclaimed (last mile) |
+| GET | `/delivery/cost` | Network fees actually charged per payout, incl. registry calls, as a share of the amount |
 | GET | `/ml/metrics` · `/eval/recon` | Screening evaluation · reconciliation accuracy |
 | POST | `/requests/upload` | Upload a CSV (format: `data/samples/README.md`) |
 | GET | `/requests?status=&flagged=&batch=&recon_status=` | List requests |
@@ -53,6 +55,7 @@ Matches the design doc's payment state machine (its VALIDATED / FLAGGED / CLEARE
 | GET | `/beneficiaries/lookup?id=` | Real beneficiary ID → its token (computed, not stored) |
 | POST | `/payouts/claims` | Which claimable balances were picked up (→ `CLAIMED`) or returned to the NGO |
 | GET | `/public/summary` · `/public/batches/{id}` · `/public/payments/{ref}` | Donor view: amounts, outcomes, transactions. No personal data |
+| GET | `/public/claimable?wallet=G…` | Payouts waiting for that wallet to claim (reference, batch, amount, balance id). For the claim page |
 | POST | `/review/approve-clean` | Approve every pending request with no flags |
 | POST | `/payouts/run?limit=20` | Pay approved requests |
 | POST | `/payouts/verify` | Look up SUBMITTED / UNKNOWN txs by hash |
