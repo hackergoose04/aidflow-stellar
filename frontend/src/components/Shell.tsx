@@ -1,5 +1,6 @@
 "use client";
 
+import Image from "next/image";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { useReviewer } from "@/components/ui";
@@ -33,13 +34,7 @@ const OPS: { href: string; label: string; icon: IconName }[] = [
 ];
 
 function Logo() {
-  return (
-    <span className="grid h-6 w-6 place-items-center rounded-md bg-zinc-900">
-      <svg viewBox="0 0 16 16" className="h-3.5 w-3.5" fill="none" stroke="white" strokeWidth={1.8} strokeLinecap="round">
-        <path d="M2 11c3 0 3-6 6-6s3 6 6 6" />
-      </svg>
-    </span>
-  );
+  return <Image src="/icon.svg" width={24} height={24} alt="" />;
 }
 
 function NavLink({ href, label, icon, active }: { href: string; label: string; icon: IconName; active: boolean }) {
