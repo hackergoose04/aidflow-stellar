@@ -35,8 +35,8 @@ const OPS: { href: string; label: string; icon: IconName }[] = [
 
 function Logo() {
   return (
-    <span className="grid h-6 w-6 place-items-center rounded-md bg-zinc-900">
-      <svg viewBox="0 0 16 16" className="h-3.5 w-3.5" fill="none" stroke="white" strokeWidth={1.8} strokeLinecap="round">
+    <span className="grid h-7 w-7 place-items-center rounded-md bg-zinc-900">
+      <svg viewBox="0 0 16 16" className="h-4 w-4" fill="none" stroke="white" strokeWidth={1.8} strokeLinecap="round">
         <path d="M2 11c3 0 3-6 6-6s3 6 6 6" />
       </svg>
     </span>
@@ -46,7 +46,7 @@ function Logo() {
 function NavLink({ href, label, icon, active }: { href: string; label: string; icon: IconName; active: boolean }) {
   return (
     <Link href={href}
-      className={`flex items-center gap-2.5 rounded-md px-2 py-1.5 text-[13px] transition-colors ${
+      className={`dock-item flex items-center gap-2.5 rounded-md px-2 py-1.5 text-[13px] transition-[color,background-color,transform] duration-200 ${
         active ? "bg-white font-medium text-zinc-900 shadow-[0_0_0_1px_rgba(0,0,0,0.06),0_1px_2px_rgba(0,0,0,0.04)]"
           : "text-zinc-600 hover:bg-zinc-200/50 hover:text-zinc-900"}`}>
       <Icon name={icon} className={`h-4 w-4 ${active ? "text-zinc-900" : "text-zinc-400"}`} />
@@ -90,7 +90,10 @@ export function Shell({ children }: { children: React.ReactNode }) {
       <div className="min-h-screen bg-white">
         <header className="border-b border-zinc-100">
           <div className="mx-auto flex h-14 max-w-5xl items-center justify-between px-4 sm:px-6">
-            <span className="flex items-center gap-2 text-[14px] font-semibold text-zinc-900"><Logo /> AidFlow</span>
+            <Link href="/" aria-label="AidFlow home"
+              className="flex items-center gap-2 rounded-sm text-[14px] font-semibold text-zinc-900 hover:text-zinc-600 focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-zinc-900">
+              <Logo /> AidFlow
+            </Link>
             <span className="flex items-center gap-4">
               <NetworkPill />
               <Link href={path.startsWith("/claim") ? "/donor" : "/claim"} className="text-zinc-500 hover:text-zinc-900">
@@ -109,10 +112,10 @@ export function Shell({ children }: { children: React.ReactNode }) {
     <div className="min-h-screen md:flex">
       <aside className="sticky top-0 z-20 border-b border-zinc-200 bg-zinc-100/80 backdrop-blur md:h-screen md:w-56 md:shrink-0 md:border-r md:border-b-0 md:bg-zinc-100/60">
         <div className="flex h-12 items-center justify-between px-4 md:h-14">
-          <Link href="/" className="flex items-center gap-2 text-[14px] font-semibold text-zinc-900"><Logo /> AidFlow</Link>
+          <Link href="/" className="flex items-center gap-2.5 text-[15px] font-semibold text-zinc-900"><Logo /> AidFlow</Link>
           <span className="md:hidden"><NetworkPill /></span>
         </div>
-        <nav className="flex gap-1 overflow-x-auto px-3 pb-2 md:flex-col md:gap-0.5 md:overflow-visible md:pb-0">
+        <nav className="dock-strip flex gap-1 overflow-x-auto px-3 pb-2 md:flex-col md:gap-0.5 md:overflow-visible md:pb-0">
           {OPS.map((l) => <NavLink key={l.href} {...l} active={isActive(l.href)} />)}
           <div className="hidden px-2 pt-5 pb-1 text-[11px] font-medium text-zinc-400 md:block">Public</div>
           <NavLink href="/donor" label="Donor view" icon="globe" active={false} />
