@@ -4,7 +4,7 @@ import Link from "next/link";
 import { Fragment, useCallback, useEffect, useState } from "react";
 import { get, payAll, post, type AidRequest, type ClaimResult, type Delivery, type VerifyResult } from "@/lib/api";
 import { formatAmount, formatHours, formatTime, STATUS_STYLE } from "@/lib/format";
-import { Button, Card, ClaimBadge, Empty, ErrorNote, Notice, PageHeader, RegistryBadge, Stats, TxLink } from "@/components/ui";
+import { Button, Card, ClaimBadge, Empty, ErrorNote, Notice, PageHeader, RegistryBadge, Select, Stats, TxLink } from "@/components/ui";
 
 const PAID_STATES = new Set(["SUBMITTED", "CONFIRMED", "CLAIMED", "FAILED", "UNKNOWN"]);
 
@@ -85,10 +85,9 @@ export default function Payouts() {
         subtitle="Send approved payouts and verify their status. When enabled, the on-chain registry blocks repeat payments in the same payout slot."
         action={<>
           {batches.length > 1 && (
-            <select value={batch} onChange={(e) => setBatch(e.target.value)} className="input" disabled={!!busy} title="Pay one batch, or everything approved">
-              <option value="">All batches · {approvedRows.length}</option>
-              {batches.map((b) => <option key={b} value={b}>{b} · {approvedRows.filter((r) => (r.batch_id ?? "") === b).length}</option>)}
-            </select>
+            <Select label="Batch to pay" className="w-56" value={batch} onChange={setBatch} disabled={!!busy}
+              options={[{ value: "", label: "All batches", hint: String(approvedRows.length) },
+                ...batches.map((b) => ({ value: b, label: b, hint: String(approvedRows.filter((r) => (r.batch_id ?? "") === b).length) }))]} />
           )}
           <Button variant="secondary" disabled={!!busy} onClick={() => run("verify")}>
             {busy === "verify" ? "Checking…" : "Verify & check claims"}

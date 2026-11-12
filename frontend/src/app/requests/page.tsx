@@ -5,7 +5,7 @@ import { useRouter, useSearchParams } from "next/navigation";
 import { Suspense, useEffect, useMemo, useState } from "react";
 import { get, STATUSES, type AidRequest, type Status } from "@/lib/api";
 import { formatAmount, formatTime, STATUS_STYLE } from "@/lib/format";
-import { Button, Card, ErrorNote, FlagChips, PageHeader, StatusBadge } from "@/components/ui";
+import { Button, Card, ErrorNote, FlagChips, PageHeader, Select, StatusBadge } from "@/components/ui";
 
 type SortKey = "created_at" | "risk_score" | "amount";
 type RequestGroup = "attention" | "awaiting" | "on-chain" | "closed";
@@ -137,20 +137,17 @@ function RequestsTable() {
           </div>
 
           <div className="mt-3 flex flex-wrap items-center gap-2">
-            <select value={status ?? ""} onChange={(e) => setView({ status: (e.target.value as Status) || null })}
-              aria-label="Filter by exact request status" className="input">
-              <option value="">All statuses</option>
-              {STATUSES.map((s) => <option key={s} value={s}>{STATUS_STYLE[s].label}</option>)}
-            </select>
-            <select value={batch} onChange={(e) => setBatch(e.target.value)} aria-label="Filter by batch" className="input">
-              <option value="">All batches</option>
-              {batches.map((b) => <option key={b} value={b}>{b}</option>)}
-            </select>
-            <select value={sort} onChange={(e) => setSort(e.target.value as SortKey)} aria-label="Sort requests" className="input">
-              <option value="created_at">Newest first</option>
-              <option value="risk_score">Highest AI risk</option>
-              <option value="amount">Largest amount</option>
-            </select>
+            <Select label="Filter by status" className="w-44" value={status ?? ""}
+              onChange={(v) => setView({ status: (v as Status) || null })}
+              options={[{ value: "", label: "All statuses" },
+                ...STATUSES.map((s) => ({ value: s, label: STATUS_STYLE[s].label, dot: STATUS_STYLE[s].dot,
+                  hint: String(rows?.filter((r) => r.status === s).length ?? "") }))]} />
+            <Select label="Filter by batch" className="w-48" value={batch} onChange={setBatch}
+              options={[{ value: "", label: "All batches" },
+                ...batches.map((b) => ({ value: b, label: b, hint: String(rows?.filter((r) => r.batch_id === b).length ?? "") }))]} />
+            <Select label="Sort requests" className="w-40" value={sort} onChange={(v) => setSort(v as SortKey)}
+              options={[{ value: "created_at", label: "Newest first" }, { value: "risk_score", label: "Highest AI risk" },
+                { value: "amount", label: "Largest amount" }]} />
             <form onSubmit={(e) => { e.preventDefault(); lookup(); }} className="flex items-center gap-1"
               title="The real ID is hashed on the server to find this person's token. It is not stored.">
               <input value={realId} onChange={(e) => setRealId(e.target.value)} placeholder="Real beneficiary ID" className="input w-44" />
