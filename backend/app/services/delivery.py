@@ -42,6 +42,7 @@ def timing(conn: sqlite3.Connection) -> dict:
     "In hand" is the confirmation for a direct payment (it lands in the wallet), and the claim
     for a claimable balance. Balances not yet claimed are counted as still waiting."""
     to_chain, to_hand, settle = [], [], []
+    legs = {"approve_to_send": [], "send_to_chain": [], "chain_to_hand": []}
     waiting = 0
     rows = conn.execute("SELECT request_ref, method, status, claimed_at FROM requests WHERE status IN (?, ?)",
                         (Status.CONFIRMED, Status.CLAIMED)).fetchall()  # fetchall: no cursor left open
@@ -54,14 +55,31 @@ def timing(conn: sqlite3.Connection) -> dict:
         submitted = _ts(_first_event(conn, r["request_ref"], "submitted", last=True))
         if submitted:
             settle.append((confirmed - submitted).total_seconds())
-        if r["method"] == "payment":
-            to_hand.append((confirmed - approved).total_seconds())
-        elif r["claimed_at"]:
-            to_hand.append((_ts(r["claimed_at"]) - approved).total_seconds())
-        else:
+        # Legs are measured on the payouts that reached the person, so they break down the headline.
+        in_hand_at = confirmed if r["method"] == "payment" else _ts(r["claimed_at"])  # payment: in wallet on confirm
+        if in_hand_at is None:
             waiting += 1
+            continue
+        to_hand.append((in_hand_at - approved).total_seconds())
+        if submitted:
+            legs["approve_to_send"].append((submitted - approved).total_seconds())
+            legs["send_to_chain"].append((confirmed - submitted).total_seconds())
+            legs["chain_to_hand"].append((in_hand_at - confirmed).total_seconds())
     return {"approved_to_chain": _stats(to_chain), "approved_to_hand": _stats(to_hand),
-            "submitted_to_chain": _stats(settle), "not_in_hand_yet": waiting}
+            "submitted_to_chain": _stats(settle), "not_in_hand_yet": waiting,
+            # median seconds per leg of the journey; the figure on the overview is built from these
+            "legs": {k: (statistics.median(v) if v else None) for k, v in legs.items()}}
+
+
+def arrival(conn: sqlite3.Connection, now: datetime | None = None) -> dict:
+    """Where every paid-out amount is right now: in the beneficiary's hands, still waiting to be
+    claimed (and for how long), or returned to the NGO after the claim window."""
+    in_hand = conn.execute("SELECT COUNT(*) FROM requests WHERE status = ? OR (status = ? AND method = 'payment')",
+                           (Status.CLAIMED, Status.CONFIRMED)).fetchone()[0]
+    returned = conn.execute("SELECT COUNT(*) FROM requests WHERE claim_status = 'RECLAIMED'").fetchone()[0]
+    pending = unclaimed(conn, now)
+    overdue = sum(1 for u in pending if u["overdue"])
+    return {"in_hand": in_hand, "waiting": len(pending) - overdue, "overdue": overdue, "returned": returned}
 
 
 def unclaimed(conn: sqlite3.Connection, now: datetime | None = None) -> list[dict]:

@@ -191,45 +191,102 @@ function Step({ n, title, count, caption, alert = false, children }: {
 /** The Problem Space goal: shorten "decided to pay" -> "money in hand", and treat arrival as the start. */
 function LastMile({ d, cost }: { d: Delivery; cost: DeliveryCost | null }) {
   const t = d.timing;
-  const overdue = d.unclaimed.filter((u) => u.overdue).length;
-  const cells: { label: string; value: React.ReactNode; line: string; foot: string; tone?: string }[] = [
-    {
-      label: "Approval → money in hand",
-      value: t.approved_to_hand.n ? formatDuration(t.approved_to_hand.median_s) : "—",
-      line: t.approved_to_hand.n
-        ? `median of ${t.approved_to_hand.n} payouts · final on chain ${formatDuration(t.submitted_to_chain.median_s)} after sending`
-        : `${t.not_in_hand_yet} sent, waiting to be claimed`,
-      foot: "Typical aid disbursement takes weeks.",
-    },
-    {
-      label: "Network cost per payout",
-      value: cost?.payouts ? `${((cost.cost_share ?? 0) * 100).toFixed(2)}%` : "—",
-      line: cost?.payouts
-        ? `≈ $${(cost.avg_fee_usd ?? 0).toFixed(3)} each · global average ${((cost.benchmark ?? 0.064) * 100).toFixed(1)}% · UN target ${((cost.target ?? 0.03) * 100).toFixed(0)}%`
-        : cost ? "No payouts yet" : "Reading fees from Stellar…",
-      foot: "Testnet fees for payment and registry. Excludes cash-out.",
-    },
-    {
-      label: "Sent, not yet received",
-      value: d.unclaimed.length,
-      line: overdue ? `${overdue} waiting over ${formatHours(d.alert_hours)}: follow up` : `none waiting over ${formatHours(d.alert_hours)}`,
-      foot: "Unclaimed money returns to the NGO after 30 days.",
-      tone: overdue ? "text-rose-600" : undefined,
-    },
+  const legs = t.legs;
+  // Sequential blue, light -> dark along the journey (validated with the dataviz palette script).
+  const journey = legs ? [
+    { label: "Approval → sent", value: legs.approve_to_send, color: "#60a5fa" },
+    { label: "Sent → final on chain", value: legs.send_to_chain, color: "#2563eb" },
+    { label: "On chain → in hand", value: legs.chain_to_hand, color: "#1e3a8a" },
+  ] : [];
+  const bench = [
+    { label: "Global average", value: cost?.benchmark ?? 0.064, emphasis: false },
+    { label: "UN target", value: cost?.target ?? 0.03, emphasis: false },
+    { label: "AidFlow", value: cost?.cost_share ?? 0, emphasis: true },
   ];
+  const arr = d.arrival;
+  const overdue = arr?.overdue ?? d.unclaimed.filter((u) => u.overdue).length;
+  // Status hues: good / warning / serious, plus a neutral for money that came back.
+  const where = arr ? [
+    { label: "In the beneficiary's hands", value: arr.in_hand, color: "#15803d" },
+    { label: `Waiting to be claimed`, value: arr.waiting, color: "#f59e0b" },
+    { label: `Waiting over ${formatHours(d.alert_hours)}`, value: arr.overdue, color: "#e11d48" },
+    { label: "Returned to the NGO", value: arr.returned, color: "#71717a" },
+  ] : [];
+
   return (
     <Card title="From decision to money in hand" action={<Link href="/payouts" className="link">Payouts →</Link>} flush className="mb-6">
       <div className="grid sm:grid-cols-3">
-        {cells.map((c, i) => (
-          <div key={c.label} className={`px-5 py-4 ${i > 0 ? "border-zinc-100 max-sm:border-t sm:border-l" : ""}`}>
-            <div className="text-[12px] text-zinc-500">{c.label}</div>
-            <div className={`mt-1 text-[26px] font-semibold leading-none tracking-tight tabular-nums ${c.tone ?? "text-zinc-900"}`}>{c.value}</div>
-            <div className="mt-2 text-[12px] text-zinc-500">{c.line}</div>
-            <div className="mt-3 text-[11px] text-zinc-400">{c.foot}</div>
-          </div>
-        ))}
+        <Panel label="Approval → money in hand" value={t.approved_to_hand.n ? formatDuration(t.approved_to_hand.median_s) : "—"}
+          line={t.approved_to_hand.n ? `median of ${t.approved_to_hand.n} payouts · typical aid disbursement: weeks` : `${t.not_in_hand_yet} sent, waiting to be claimed`}>
+          {journey.some((l) => l.value !== null) && (
+            <Split parts={journey.map((l) => ({ ...l, value: l.value ?? 0 }))} format={(v) => formatDuration(v)} />
+          )}
+        </Panel>
+
+        <Panel label="Network cost per payout" value={cost?.payouts ? `${((cost.cost_share ?? 0) * 100).toFixed(2)}%` : "—"}
+          line={cost?.payouts ? `of the amount delivered · ≈ $${(cost.avg_fee_usd ?? 0).toFixed(3)} each` : cost ? "No payouts yet" : "Reading fees from Stellar…"}>
+          {cost?.payouts ? (
+            <ul className="mt-4 flex flex-col gap-2.5">
+              {bench.map((b) => (
+                <li key={b.label} className="grid grid-cols-[6.5rem_1fr_3rem] items-center gap-2 text-[12px]" title={`${b.label}: ${(b.value * 100).toFixed(2)}% of the amount`}>
+                  <span className={b.emphasis ? "font-medium text-zinc-900" : "text-zinc-500"}>{b.label}</span>
+                  <span className="h-2 overflow-hidden rounded-full bg-zinc-100">
+                    <span className="block h-full rounded-full" style={{
+                      width: `${(b.value / Math.max(...bench.map((x) => x.value))) * 100}%`, minWidth: 4,
+                      background: b.emphasis ? "#2563eb" : "#d4d4d8",
+                    }} />
+                  </span>
+                  <span className={`text-right tabular-nums ${b.emphasis ? "font-medium text-zinc-900" : "text-zinc-500"}`}>{(b.value * 100).toFixed(b.emphasis ? 2 : 1)}%</span>
+                </li>
+              ))}
+            </ul>
+          ) : null}
+        </Panel>
+
+        <Panel label="Sent, not yet received" value={d.unclaimed.length} tone={overdue ? "text-rose-600" : undefined}
+          line={overdue ? `${overdue} waiting over ${formatHours(d.alert_hours)}: follow up` : `none waiting over ${formatHours(d.alert_hours)} · unclaimed money returns after 30 days`}>
+          {arr && where.some((w) => w.value > 0) && <Split parts={where} format={(v) => String(v)} />}
+        </Panel>
       </div>
     </Card>
+  );
+}
+
+function Panel({ label, value, line, tone, children }: {
+  label: string; value: React.ReactNode; line: string; tone?: string; children?: React.ReactNode;
+}) {
+  return (
+    <div className="border-zinc-100 px-5 py-4 max-sm:border-t max-sm:first:border-t-0 sm:border-l sm:first:border-l-0">
+      <div className="text-[12px] text-zinc-500">{label}</div>
+      <div className={`mt-1 text-[26px] font-semibold leading-none tracking-tight ${tone ?? "text-zinc-900"}`}>{value}</div>
+      <div className="mt-2 text-[12px] text-zinc-500">{line}</div>
+      {children}
+    </div>
+  );
+}
+
+/** One whole split into parts: a thin segmented bar, figures listed beside it (never on the bar). */
+function Split({ parts, format }: { parts: { label: string; value: number; color: string }[]; format: (v: number) => string }) {
+  const total = parts.reduce((n, p) => n + p.value, 0) || 1;
+  return (
+    <div className="mt-4">
+      <div className="flex h-2 gap-[2px] overflow-hidden rounded-full" role="img"
+        aria-label={parts.map((p) => `${p.label}: ${format(p.value)}`).join(", ")}>
+        {parts.filter((p) => p.value > 0).map((p) => (
+          <span key={p.label} title={`${p.label}: ${format(p.value)}`}
+            style={{ flexGrow: p.value / total, flexBasis: 0, minWidth: 4, background: p.color }} />
+        ))}
+      </div>
+      <ul className="mt-2.5 flex flex-col gap-1 text-[12px]">
+        {parts.map((p) => (
+          <li key={p.label} className={`flex items-center gap-2 ${p.value ? "" : "opacity-40"}`}>
+            <span className="h-2 w-2 shrink-0 rounded-[2px]" style={{ background: p.color }} />
+            <span className="flex-1 truncate text-zinc-500">{p.label}</span>
+            <span className="tabular-nums font-medium text-zinc-900">{format(p.value)}</span>
+          </li>
+        ))}
+      </ul>
+    </div>
   );
 }
 

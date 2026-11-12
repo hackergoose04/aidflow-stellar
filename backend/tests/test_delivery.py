@@ -38,6 +38,7 @@ def test_timing_counts_claim_as_money_in_hand(tmp_path):
     assert t["submitted_to_chain"]["median_s"] == 5
     assert t["approved_to_hand"]["n"] == 2 and t["approved_to_hand"]["max_s"] == 600  # payment 60 s, claim 10 min
     assert t["not_in_hand_yet"] == 1
+    assert t["legs"] == {"approve_to_send": 55, "send_to_chain": 5, "chain_to_hand": 270}  # median of payment 0 s and claim 540 s
 
 
 def test_unclaimed_flags_overdue_oldest_first(tmp_path):
@@ -48,3 +49,14 @@ def test_unclaimed_flags_overdue_oldest_first(tmp_path):
     rows = delivery.unclaimed(conn, now=T0 + timedelta(hours=80))
     assert [r["request_ref"] for r in rows] == ["OLD", "NEW"]
     assert [r["overdue"] for r in rows] == [True, False]  # 80 h and 10 h against a 72 h alert
+
+
+def test_arrival_splits_paid_amounts(tmp_path):
+    conn = _conn(tmp_path)
+    _add(conn, "P", "payment", "CONFIRMED")                                   # in hand on confirmation
+    _add(conn, "C", "claimable_balance", "CLAIMED", "CLAIMED", T0.isoformat())  # claimed
+    _add(conn, "W", "claimable_balance", "CONFIRMED", "UNCLAIMED", submitted=T0 + timedelta(hours=79))
+    _add(conn, "O", "claimable_balance", "CONFIRMED", "UNCLAIMED", submitted=T0)  # overdue at +80 h
+    _add(conn, "R", "claimable_balance", "CONFIRMED", "RECLAIMED")
+    a = delivery.arrival(conn, now=T0 + timedelta(hours=80))
+    assert a == {"in_hand": 2, "waiting": 1, "overdue": 1, "returned": 1}
