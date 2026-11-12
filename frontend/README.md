@@ -12,7 +12,8 @@ in `frontend/.env.local`.
 
 | Page | What it's for |
 | --- | --- |
-| `/` Overview | Wallet balance, status counts, the 5 pipeline steps as buttons, upload, model scorecard |
+| `/` Overview | Balance, the 5 pipeline steps as buttons, decision-to-money-in-hand metrics, status counts, Stellar accounts |
+| `/evaluation` | Charts (AI risk distribution, batches) and the model / reconciliation scorecards |
 | `/review` | Review queue: flagged requests sorted by AI risk, with plain-language reasons; approve / hold / reject; invalid records to correct |
 | `/requests` | All requests: filter by status, search, sort by risk |
 | `/requests/[ref]` | One request: details, flags, transaction link, audit trail, approve / hold / reject / correct / retry, delivery and registry status |

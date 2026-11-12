@@ -4,7 +4,7 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { useReviewer } from "@/components/ui";
 
-type IconName = "home" | "inbox" | "list" | "send" | "scale" | "globe" | "wallet";
+type IconName = "home" | "inbox" | "list" | "send" | "scale" | "globe" | "wallet" | "chart";
 
 const ICON_PATHS: Record<IconName, string> = {
   home: "M3 10.5 12 3l9 7.5V20a1 1 0 0 1-1 1h-5v-6h-6v6H4a1 1 0 0 1-1-1z",
@@ -14,6 +14,7 @@ const ICON_PATHS: Record<IconName, string> = {
   scale: "M16 3h5v5 M8 21H3v-5 M21 3l-7 7 M3 21l7-7",
   globe: "M12 2a10 10 0 1 0 0 20 10 10 0 0 0 0-20z M2 12h20 M12 2a15 15 0 0 1 0 20 M12 2a15 15 0 0 0 0 20",
   wallet: "M20 7H4a2 2 0 0 0-2 2v9a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2V9a2 2 0 0 0-2-2z M16 3H6a2 2 0 0 0-2 2v2 M16 14h.01",
+  chart: "M3 3v18h18 M7 15l4-5 3 3 5-7",
 };
 
 function Icon({ name, className = "h-4 w-4" }: { name: IconName; className?: string }) {
@@ -31,6 +32,7 @@ const OPS: { href: string; label: string; icon: IconName }[] = [
   { href: "/requests", label: "Requests", icon: "list" },
   { href: "/payouts", label: "Payouts", icon: "send" },
   { href: "/recon", label: "Reconciliation", icon: "scale" },
+  { href: "/evaluation", label: "Evaluation", icon: "chart" },
 ];
 
 function Logo() {

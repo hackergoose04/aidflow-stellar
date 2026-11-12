@@ -16,16 +16,10 @@ function PaymentStatus({ request }: { request: AidRequest }) {
       : request.status === "UNKNOWN"
         ? "border-amber-200 bg-amber-50 text-amber-800"
         : "border-indigo-200 bg-indigo-50 text-indigo-800";
-  const method = request.method === "payment" ? "Direct payment"
-    : request.method === "claimable_balance" ? "Claimable balance" : null;
-
   return (
-    <div className="flex min-w-[150px] flex-col items-start gap-1">
-      <span className={`inline-flex h-[22px] items-center whitespace-nowrap rounded-md border px-1.5 text-[12px] font-medium ${tone}`}>
-        {STATUS_STYLE[request.status].label}
-      </span>
-      {method && <span className="text-[11px] text-zinc-500">{method}</span>}
-    </div>
+    <span className={`inline-flex h-[22px] items-center whitespace-nowrap rounded-md border px-1.5 text-[12px] font-medium ${tone}`}>
+      {STATUS_STYLE[request.status].label}
+    </span>
   );
 }
 
@@ -133,7 +127,7 @@ export default function Payouts() {
                   <th>Ref</th>
                   <th>Beneficiary</th>
                   <th className="text-right">Amount</th>
-                  <th>Payment</th>
+                  <th>Status</th>
                   <th>Delivery</th>
                   <th>Registry</th>
                   <th>Sent</th>
