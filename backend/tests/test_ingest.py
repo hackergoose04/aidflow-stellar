@@ -171,3 +171,27 @@ def test_public_api_shows_no_personal_data(client):
     assert p["status"] in ("Under review", "Not paid") and len(p["memo_hash"]) == 64
     batch = client.get(f"/public/batches/{p['batch_id']}").json()
     assert all("wallet" not in x and "beneficiary_id" not in x for x in batch)
+
+
+def test_decisions_need_a_named_reviewer(client):
+    upload(client)
+    ref = client.get("/requests?status=PENDING_REVIEW").json()[0]["request_ref"]
+    assert client.post(f"/requests/{ref}/approve", json={"reviewer": "  "}).status_code == 422
+    assert client.post(f"/requests/{ref}/approve", json={"reviewer": "ana"}).status_code == 200
+
+
+def test_unchanged_correction_is_refused(client):
+    """The form sends "150" for a stored "150.0000000": that is not a change."""
+    upload(client)
+    row = client.get("/requests?status=PENDING_REVIEW").json()[0]
+    body = {"reviewer": "ana", "amount": str(float(row["amount"])), "wallet": row["wallet"], "created_at": row["created_at"]}
+    res = client.post(f"/requests/{row['request_ref']}/correct", json=body)
+    assert res.status_code == 409 and "nothing to change" in res.json()["detail"]
+    assert client.get(f"/requests/{row['request_ref']}").json()["flags"] == row["flags"]  # not re-screened
+
+
+def test_reupload_logs_duplicate_not_rejection(client):
+    upload(client)
+    upload(client)
+    kinds = [e["kind"] for e in client.get("/requests/REQ-0001").json()["events"]]
+    assert "duplicate_upload" in kinds and "rejected_at_upload" not in kinds

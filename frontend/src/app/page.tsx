@@ -3,10 +3,10 @@
 import Link from "next/link";
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
-  get, post, uploadCsv,
-  type ClaimResult, type MlMetrics, type PayoutResult, type ReconEval, type Summary, type UploadReport, type VerifyResult, type Wallet,
+  get, payAll, post, uploadCsv,
+  type ClaimResult, type Delivery, type DeliveryCost, type MlMetrics, type ReconEval, type Summary, type UploadReport, type VerifyResult, type Wallet,
 } from "@/lib/api";
-import { formatAmount, pct, shortKey } from "@/lib/format";
+import { formatAmount, formatDuration, formatHours, pct, shortKey } from "@/lib/format";
 import { Button, Card, ErrorNote, Notice, PageHeader, ReviewerInput, Stats, useReviewer } from "@/components/ui";
 import { BatchBars, RiskHistogram, StatusBreakdown } from "@/components/Charts";
 
@@ -16,8 +16,11 @@ export default function Overview() {
   const [walletError, setWalletError] = useState<string | null>(null);
   const [metrics, setMetrics] = useState<MlMetrics | null>(null);
   const [reconEval, setReconEval] = useState<ReconEval | null>(null);
+  const [delivery, setDelivery] = useState<Delivery | null>(null);
+  const [cost, setCost] = useState<DeliveryCost | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
+  const [progress, setProgress] = useState("");
   const [message, setMessage] = useState<React.ReactNode>(null);
   const [upload, setUpload] = useState<UploadReport | null>(null);
   const [reviewer, setReviewer] = useReviewer();
@@ -33,6 +36,8 @@ export default function Overview() {
     get<Wallet>("/wallet").then(setWallet, (e) => setWalletError((e as Error).message));
     get<MlMetrics>("/ml/metrics").then(setMetrics, () => setMetrics(null));
     get<ReconEval>("/eval/recon").then(setReconEval, () => setReconEval(null));
+    get<Delivery>("/delivery").then(setDelivery, () => setDelivery(null));
+    get<DeliveryCost>("/delivery/cost").then(setCost, () => setCost(null));
   }, []);
 
   useEffect(() => { refresh(); }, [refresh]);
@@ -76,7 +81,7 @@ export default function Overview() {
       <Stats items={[
         { label: "NGO balance", value: wallet ? formatAmount(wallet.balances.AIDUSD ?? 0) : "—", hint: "AIDUSD available" },
         { label: "Paid out", value: (s?.CONFIRMED ?? 0) + (s?.CLAIMED ?? 0), hint: `${s?.CLAIMED ?? 0} claimed by beneficiary` },
-        { label: "Pending or failed", value: (s?.SUBMITTED ?? 0) + (s?.UNKNOWN ?? 0) + (s?.FAILED ?? 0), hint: "on chain",
+        { label: "Pending or failed", value: (s?.SUBMITTED ?? 0) + (s?.UNKNOWN ?? 0) + (s?.FAILED ?? 0), hint: "need attention",
           tone: (s?.FAILED ?? 0) + (s?.UNKNOWN ?? 0) ? "text-rose-600" : undefined },
       ]} />
 
@@ -98,11 +103,15 @@ export default function Overview() {
           </Step>
           <Step n={3} title="Pay" count={s?.APPROVED ?? 0} caption="approved, ready to send">
             <Button size="sm" disabled={!!busy || !s?.APPROVED}
-              onClick={() => run("pay", () => post<PayoutResult[]>("/payouts/run"), (r) => {
+              onClick={() => run("pay", () => {
+                const total = s?.APPROVED ?? 0;
+                setProgress(`0 of ${total}`);
+                return payAll(async (done) => { setProgress(`${Math.min(done, total)} of ${total}`); await refresh(); });
+              }, (r) => {
                 const ok = r.filter((x) => x.status === "CONFIRMED").length;
                 return <>Sent {r.length}: {ok} confirmed. <Link className="link" href="/payouts">See payouts</Link></>;
               })}>
-              {busy === "pay" ? "Paying…" : "Run payouts"}
+              {busy === "pay" ? `Paying ${progress}…` : "Run payouts"}
             </Button>
           </Step>
           <Step n={4} title="Verify" count={(s?.SUBMITTED ?? 0) + (s?.UNKNOWN ?? 0)} caption="awaiting chain result">
@@ -120,6 +129,8 @@ export default function Overview() {
           </Step>
         </div>
       </Card>
+
+      {delivery && (delivery.timing.approved_to_chain.n > 0 || delivery.unclaimed.length > 0) && <LastMile d={delivery} cost={cost} />}
 
       <div className="mb-6 grid items-start gap-6 lg:grid-cols-3">
         <div className="flex min-w-0 flex-col gap-6 lg:col-span-2">
@@ -192,6 +203,87 @@ function Step({ n, title, count, caption, alert = false, children }: {
       <div className="mt-1.5 flex-1 text-[12px] text-zinc-500">{caption}</div>
       <div className="mt-4 flex flex-wrap gap-2">{children}</div>
     </div>
+  );
+}
+
+/** The Problem Space goal: shorten "decided to pay" -> "money in hand", and treat arrival as the start. */
+function LastMile({ d, cost }: { d: Delivery; cost: DeliveryCost | null }) {
+  const t = d.timing;
+  const overdue = d.unclaimed.filter((u) => u.overdue).length;
+  const scale = Math.max(cost?.benchmark ?? 0.064, cost?.cost_share ?? 0);
+  const bars: [string, number | undefined, string][] = [
+    ["AidFlow", cost?.cost_share, "bg-emerald-500"],
+    ["UN target", cost?.target, "bg-zinc-300"],
+    ["Global average", cost?.benchmark, "bg-zinc-300"],
+  ];
+  return (
+    <Card title="From decision to money in hand" action={<Link href="/payouts" className="link">Payouts →</Link>} flush className="mb-6">
+      <div className="grid lg:grid-cols-3">
+        <section className="border-zinc-100 px-5 py-4 max-lg:border-b">
+          <div className="text-[12px] text-zinc-500">Approval → money in hand</div>
+          <div className="mt-1 text-[26px] font-semibold tracking-tight tabular-nums text-zinc-900">
+            {t.approved_to_hand.n ? formatDuration(t.approved_to_hand.median_s) : "—"}
+          </div>
+          <div className="text-[12px] text-zinc-500">
+            {t.approved_to_hand.n
+              ? <>median of {t.approved_to_hand.n} payouts{t.approved_to_hand.max_s !== null && ` · slowest ${formatDuration(t.approved_to_hand.max_s)}`}</>
+              : `nothing received yet · ${t.not_in_hand_yet} sent, waiting to be claimed`}
+          </div>
+          <dl className="mt-4 divide-y divide-zinc-100 border-t border-zinc-100 text-[13px]">
+            <div className="flex justify-between py-2"><dt className="text-zinc-500">Sent → final on chain</dt><dd className="font-medium tabular-nums">{formatDuration(t.submitted_to_chain.median_s)}</dd></div>
+            <div className="flex justify-between py-2"><dt className="text-zinc-500">Approval → on chain</dt><dd className="font-medium tabular-nums">{formatDuration(t.approved_to_chain.median_s)}</dd></div>
+            <div className="flex justify-between py-2"><dt className="text-zinc-500">Typical aid disbursement</dt><dd className="text-zinc-500">weeks</dd></div>
+          </dl>
+        </section>
+
+        <section className="border-zinc-100 px-5 py-4 max-lg:border-b lg:border-l">
+          <div className="text-[12px] text-zinc-500">Network cost per payout</div>
+          {cost?.payouts ? (
+            <>
+              <div className="mt-1 text-[26px] font-semibold tracking-tight tabular-nums text-zinc-900">
+                {((cost.cost_share ?? 0) * 100).toFixed(2)}%
+              </div>
+              <div className="text-[12px] text-zinc-500">of the amount delivered · ≈ ${(cost.avg_fee_usd ?? 0).toFixed(3)} each</div>
+              <ul className="mt-4 flex flex-col gap-2 text-[12px]">
+                {bars.map(([label, v, color]) => (
+                  <li key={label} className="grid grid-cols-[6.5rem_1fr_2.75rem] items-center gap-2">
+                    <span className="text-zinc-500">{label}</span>
+                    <span className="h-1.5 rounded-full bg-zinc-100">
+                      <span className={`block h-full rounded-full ${color}`} style={{ width: `${((v ?? 0) / scale) * 100}%`, minWidth: 3 }} />
+                    </span>
+                    <span className="text-right font-medium tabular-nums">{((v ?? 0) * 100).toFixed(label === "AidFlow" ? 2 : 1)}%</span>
+                  </li>
+                ))}
+              </ul>
+              <p className="mt-3 text-[11px] leading-relaxed text-zinc-400">
+                Fees actually charged: payment {cost.avg_payment_fee_xlm?.toFixed(5)} XLM + registry {cost.avg_registry_fee_xlm?.toFixed(3)} XLM,
+                at an assumed ${cost.xlm_usd?.toFixed(2)}/XLM. Excludes cash-out at an agent.
+              </p>
+            </>
+          ) : <p className="mt-2 text-[13px] text-zinc-500">{cost ? "No payouts yet." : "Reading fees from Stellar…"}</p>}
+        </section>
+
+        <section className="border-zinc-100 px-5 py-4 lg:border-l">
+          <div className="text-[12px] text-zinc-500">Last mile · sent but not yet received</div>
+          <div className={`mt-1 text-[26px] font-semibold tracking-tight tabular-nums ${overdue ? "text-rose-600" : "text-zinc-900"}`}>{d.unclaimed.length}</div>
+          <div className="text-[12px] text-zinc-500">
+            {overdue ? `${overdue} waiting over ${formatHours(d.alert_hours)}: follow up` : `none waiting over ${formatHours(d.alert_hours)}`}
+          </div>
+          {d.unclaimed.length > 0 ? (
+            <ul className="mt-4 divide-y divide-zinc-100 border-t border-zinc-100 text-[13px]">
+              {d.unclaimed.slice(0, 3).map((u) => (
+                <li key={u.request_ref} className="flex items-center justify-between gap-2 py-2">
+                  <Link href={`/requests/${encodeURIComponent(u.request_ref)}`} className="truncate font-mono text-[12px] hover:underline">{u.request_ref}</Link>
+                  <span className="shrink-0 tabular-nums text-zinc-500">{formatAmount(u.amount)}</span>
+                  <span className={`shrink-0 text-[12px] tabular-nums ${u.overdue ? "font-medium text-rose-600" : "text-zinc-500"}`}>{formatHours(u.waiting_hours)}</span>
+                </li>
+              ))}
+            </ul>
+          ) : <p className="mt-4 border-t border-zinc-100 pt-3 text-[13px] text-zinc-500">Everything sent has been received.</p>}
+          <p className="mt-3 text-[11px] leading-relaxed text-zinc-400">Arrival is the start: unclaimed money is tracked, and the NGO can reclaim it after 30 days.</p>
+        </section>
+      </div>
+    </Card>
   );
 }
 

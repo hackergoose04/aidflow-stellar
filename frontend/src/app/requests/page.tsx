@@ -12,7 +12,8 @@ type SortKey = "created_at" | "risk_score" | "amount";
 function RequestsTable() {
   const params = useSearchParams();
   const router = useRouter();
-  const status = (params.get("status") as Status | null) ?? null;
+  const raw = params.get("status");
+  const status = raw && (STATUSES as readonly string[]).includes(raw) ? (raw as Status) : null;
   const [rows, setRows] = useState<AidRequest[] | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [query, setQuery] = useState("");
@@ -112,7 +113,7 @@ function RequestsTable() {
                   <tr key={r.request_ref} onClick={() => router.push(`/requests/${encodeURIComponent(r.request_ref)}`)}
                     className="cursor-pointer transition-colors hover:bg-zinc-50">
                     <td className="whitespace-nowrap font-mono text-[12px] font-medium text-zinc-900">
-                      <Link href={`/requests/${encodeURIComponent(r.request_ref)}`}>{r.request_ref}</Link>
+                      <Link href={`/requests/${encodeURIComponent(r.request_ref)}`} onClick={(e) => e.stopPropagation()}>{r.request_ref}</Link>
                     </td>
                     <td className="whitespace-nowrap text-[12px] text-zinc-500">{r.batch_id ?? "—"}</td>
                     <td className="whitespace-nowrap font-mono text-[12px] text-zinc-600">{r.beneficiary_id}</td>

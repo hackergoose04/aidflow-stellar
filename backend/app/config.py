@@ -20,6 +20,13 @@ BASE_FEE = 100                 # stroops per operation
 TX_TIMEOUT_SECONDS = 30        # tx time bounds; after this an unsent tx can never land
 RECLAIM_AFTER_SECONDS = int(os.getenv("RECLAIM_AFTER_SECONDS", 30 * 24 * 3600))
 
+# Last mile: a claimable balance still unclaimed after this long is flagged for follow-up.
+CLAIM_ALERT_HOURS = float(os.getenv("CLAIM_ALERT_HOURS", "72"))
+# Only used to express network fees in dollars; an assumption, not a live price.
+XLM_USD = float(os.getenv("XLM_USD", "0.30"))
+COST_BENCHMARK = 0.064   # World Bank global average remittance cost
+COST_TARGET = 0.03       # UN SDG 10.c target
+
 # Storage
 DB_PATH = Path(os.getenv("AIDFLOW_DB", ROOT / "data" / "aidflow.db"))
 

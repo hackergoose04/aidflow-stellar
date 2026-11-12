@@ -6,6 +6,7 @@ mistake or the backend runs twice.
 
 ```
 key          = HMAC-SHA256(REGISTRY_SECRET, PROGRAM_ID | batch_id | beneficiary_id)
+               (PROGRAM_ID namespaces a programme; scripts/reset_demo.py issues a new one per reset)
 request_hash = SHA-256(request_ref)          (also the payment's memo)
 ```
 

@@ -15,6 +15,18 @@ export const shortKey = (key: string | null, n = 4) =>
 
 export const pct = (x: number) => `${Math.round(x * 100)}%`;
 
+/** 4 s, 1 min 8 s, 3 h 20 min, 2 d 4 h */
+export function formatDuration(seconds: number | null | undefined): string {
+  if (seconds === null || seconds === undefined) return "—";
+  const s = Math.round(seconds);
+  if (s < 60) return `${s} s`;
+  if (s < 3600) return `${Math.floor(s / 60)} min${s % 60 ? ` ${s % 60} s` : ""}`;
+  if (s < 86400) return `${Math.floor(s / 3600)} h${Math.floor((s % 3600) / 60) ? ` ${Math.floor((s % 3600) / 60)} min` : ""}`;
+  return `${Math.floor(s / 86400)} d${Math.floor((s % 86400) / 3600) ? ` ${Math.floor((s % 86400) / 3600)} h` : ""}`;
+}
+
+export const formatHours = (h: number) => formatDuration(h * 3600);
+
 export const STATUS_STYLE: Record<Status, { label: string; dot: string }> = {
   INVALID: { label: "Invalid", dot: "#dc2626" },
   PENDING_REVIEW: { label: "Pending review", dot: "#d97706" },

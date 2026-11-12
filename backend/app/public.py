@@ -15,6 +15,7 @@ import sqlite3
 from fastapi import APIRouter, Depends, HTTPException
 
 from . import config, db, registry, stellar_client as sc
+from .services import claims
 
 router = APIRouter(prefix="/public", tags=["public (donor view)"])
 
@@ -84,6 +85,30 @@ def batch(batch_id: str, conn: sqlite3.Connection = Depends(_conn)) -> list[dict
     if not rows:
         raise HTTPException(404, f"no batch {batch_id}")
     return [_payment(r) for r in rows]
+
+
+@router.get("/claimable")
+def claimable(wallet: str, conn: sqlite3.Connection = Depends(_conn)) -> list[dict]:
+    """Payouts waiting for this wallet to claim them (for the beneficiary's own claim page).
+
+    Public like the rest of this router: a wallet's claimable balances are already visible on
+    chain; this only adds the payment reference and batch, never who the person is."""
+    rows = [dict(r) for r in conn.execute(
+        "SELECT * FROM requests WHERE wallet = ? AND status = 'CONFIRMED' AND method = 'claimable_balance'"
+        " AND claim_status = 'UNCLAIMED' ORDER BY submitted_at", (wallet,))]
+    out = []
+    for r in rows:
+        bid = r["balance_id"]
+        if not bid and r["tx_hash"]:
+            try:
+                bid = claims.balance_id_of(r["tx_hash"])
+                if bid:
+                    conn.execute("UPDATE requests SET balance_id = ? WHERE request_ref = ?", (bid, r["request_ref"]))
+                    conn.commit()
+            except Exception:
+                bid = None  # Horizon hiccup: the page falls back to matching by amount
+        out.append({**_payment(r), "balance_id": bid})
+    return out
 
 
 @router.get("/payments/{ref}")

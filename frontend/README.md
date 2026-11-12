@@ -19,6 +19,7 @@ in `frontend/.env.local`.
 | `/payouts` | Pay approved requests, verify unclear ones and check claims; delivery and registry status |
 | `/recon` | Reconciliation report: matched, problems, unknown on-chain payouts (`?run=1` runs it on open) |
 | `/donor` | Public donor view: totals, batches, and a per-payment check that reads Stellar directly in the browser (`?ref=` to open one) |
+| `/claim` | Public beneficiary page: connect a Stellar wallet (Stellar Wallets Kit), see payouts waiting for it, claim them in one transaction signed by the wallet |
 
 Code: `src/lib/api.ts` (types + fetch), `src/lib/format.ts` (labels, flag wording),
 `src/components/ui.tsx` (shared pieces).
