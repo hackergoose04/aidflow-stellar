@@ -3,10 +3,31 @@
 import Link from "next/link";
 import { Fragment, useCallback, useEffect, useState } from "react";
 import { get, post, type AidRequest, type ClaimResult, type PayoutResult, type VerifyResult } from "@/lib/api";
-import { formatAmount, formatTime } from "@/lib/format";
-import { Button, Card, ClaimBadge, Empty, ErrorNote, Notice, PageHeader, RegistryBadge, Stats, StatusBadge, TxLink } from "@/components/ui";
+import { formatAmount, formatTime, STATUS_STYLE } from "@/lib/format";
+import { Button, Card, ClaimBadge, Empty, ErrorNote, Notice, PageHeader, RegistryBadge, Stats, TxLink } from "@/components/ui";
 
 const PAID_STATES = new Set(["SUBMITTED", "CONFIRMED", "CLAIMED", "FAILED", "UNKNOWN"]);
+
+function PaymentStatus({ request }: { request: AidRequest }) {
+  const tone = request.status === "CONFIRMED" || request.status === "CLAIMED"
+    ? "border-emerald-200 bg-emerald-50 text-emerald-800"
+    : request.status === "FAILED"
+      ? "border-rose-200 bg-rose-50 text-rose-700"
+      : request.status === "UNKNOWN"
+        ? "border-amber-200 bg-amber-50 text-amber-800"
+        : "border-indigo-200 bg-indigo-50 text-indigo-800";
+  const method = request.method === "payment" ? "Direct payment"
+    : request.method === "claimable_balance" ? "Claimable balance" : null;
+
+  return (
+    <div className="flex min-w-[150px] flex-col items-start gap-1">
+      <span className={`inline-flex h-[22px] items-center whitespace-nowrap rounded-md border px-1.5 text-[12px] font-medium ${tone}`}>
+        {STATUS_STYLE[request.status].label}
+      </span>
+      {method && <span className="text-[11px] text-zinc-500">{method}</span>}
+    </div>
+  );
+}
 
 export default function Payouts() {
   const [rows, setRows] = useState<AidRequest[] | null>(null);
@@ -90,7 +111,7 @@ export default function Payouts() {
                   <th>Ref</th>
                   <th>Beneficiary</th>
                   <th className="text-right">Amount</th>
-                  <th>Status</th>
+                  <th>Payment</th>
                   <th>Delivery</th>
                   <th>Registry</th>
                   <th>Sent</th>
@@ -106,7 +127,7 @@ export default function Payouts() {
                     </td>
                     <td className="whitespace-nowrap font-mono text-[12px] text-zinc-500">{r.beneficiary_id}</td>
                     <td className="text-right font-medium tabular-nums">{formatAmount(r.amount)}</td>
-                    <td><StatusBadge status={r.status} /></td>
+                    <td><PaymentStatus request={r} /></td>
                     <td>{(r.status === "CONFIRMED" || r.status === "CLAIMED") ? <ClaimBadge method={r.method} status={r.claim_status} /> : <span className="text-[12px] text-zinc-300">—</span>}</td>
                     <td><RegistryBadge status={r.registry_status} /></td>
                     <td className="whitespace-nowrap text-[12px] text-zinc-500">{formatTime(r.submitted_at)}</td>
