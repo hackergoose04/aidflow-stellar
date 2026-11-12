@@ -5,14 +5,25 @@ import { useRouter, useSearchParams } from "next/navigation";
 import { Suspense, useEffect, useMemo, useState } from "react";
 import { get, STATUSES, type AidRequest, type Status } from "@/lib/api";
 import { formatAmount, formatTime, STATUS_STYLE } from "@/lib/format";
-import { Button, Card, Empty, ErrorNote, FlagChips, PageHeader, ReconBadge, RiskBar, StatusBadge } from "@/components/ui";
+import { Button, Card, ErrorNote, FlagChips, PageHeader, StatusBadge } from "@/components/ui";
 
 type SortKey = "created_at" | "risk_score" | "amount";
+type RequestGroup = "attention" | "awaiting" | "on-chain" | "closed";
+
+const GROUPS: { id: RequestGroup; label: string; statuses: Status[] }[] = [
+  { id: "attention", label: "Needs attention", statuses: ["INVALID", "PENDING_REVIEW", "HELD", "UNKNOWN"] },
+  { id: "awaiting", label: "Awaiting payout", statuses: ["APPROVED"] },
+  { id: "on-chain", label: "On chain", statuses: ["SUBMITTED", "CONFIRMED", "CLAIMED"] },
+  { id: "closed", label: "Closed", statuses: ["REJECTED", "FAILED"] },
+];
 
 function RequestsTable() {
   const params = useSearchParams();
   const router = useRouter();
-  const status = (params.get("status") as Status | null) ?? null;
+  const rawStatus = params.get("status");
+  const status = STATUSES.includes(rawStatus as Status) ? rawStatus as Status : null;
+  const rawGroup = params.get("group");
+  const group = GROUPS.some((item) => item.id === rawGroup) ? rawGroup as RequestGroup : null;
   const [rows, setRows] = useState<AidRequest[] | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [query, setQuery] = useState("");
@@ -20,126 +31,286 @@ function RequestsTable() {
   const [sort, setSort] = useState<SortKey>("created_at");
   const [batch, setBatch] = useState("");
   const [realId, setRealId] = useState("");
-  async function lookup() {
-    if (!realId.trim()) return;
-    try {
-      const { token } = await get<{ token: string }>(`/beneficiaries/lookup?id=${encodeURIComponent(realId.trim())}`);
-      setQuery(token);
-      setRealId("");
-    } catch (e) {
-      setError((e as Error).message);
-    }
-  }
 
   useEffect(() => {
-    get<AidRequest[]>(status ? `/requests?status=${status}` : "/requests")
+    get<AidRequest[]>("/requests")
       .then((r) => { setRows(r); setError(null); }, (e) => setError((e as Error).message));
-  }, [status]);
+  }, []);
+
+  const grouped = useMemo(() => {
+    if (status) return (rows ?? []).filter((r) => r.status === status);
+    if (group) {
+      const selected = GROUPS.find((item) => item.id === group);
+      return (rows ?? []).filter((r) => selected?.statuses.includes(r.status));
+    }
+    return rows ?? [];
+  }, [rows, status, group]);
 
   const shown = useMemo(() => {
     const q = query.trim().toLowerCase();
-    const list = (rows ?? []).filter((r) =>
+    const list = grouped.filter((r) =>
       (!onlyFlagged || r.flags.length > 0)
       && (!batch || r.batch_id === batch)
       && (!q || [r.request_ref, r.beneficiary_id, r.wallet].some((v) => v.toLowerCase().includes(q))));
     const val = (r: AidRequest) =>
       sort === "risk_score" ? r.risk_score ?? -1 : sort === "amount" ? Number(r.amount) : Date.parse(r.created_at);
     return list.sort((a, b) => val(b) - val(a));
-  }, [rows, query, onlyFlagged, sort, batch]);
-  const batches = useMemo(() => [...new Set((rows ?? []).map((r) => r.batch_id ?? ""))].filter(Boolean).sort(), [rows]);
+  }, [grouped, query, onlyFlagged, sort, batch]);
 
-  const setStatus = (s: Status | null) => router.replace(s ? `/requests?status=${s}` : "/requests");
+  const batches = useMemo(
+    () => [...new Set((rows ?? []).map((r) => r.batch_id ?? ""))].filter(Boolean).sort(),
+    [rows],
+  );
+  const groupCounts = useMemo(() => Object.fromEntries(GROUPS.map(({ id, statuses }) => [
+    id, rows ? rows.filter((r) => statuses.includes(r.status)).length : undefined,
+  ])) as Record<RequestGroup, number | undefined>, [rows]);
+
+  function setView(next: { status?: Status | null; group?: RequestGroup | null }) {
+    const params = new URLSearchParams();
+    if (next.status) params.set("status", next.status);
+    else if (next.group) params.set("group", next.group);
+    router.replace(params.size ? `/requests?${params}` : "/requests", { scroll: false });
+  }
+
+  async function lookup() {
+    if (!realId.trim()) return;
+    try {
+      const { token } = await get<{ token: string }>(`/beneficiaries/lookup?id=${encodeURIComponent(realId.trim())}`);
+      setQuery(token);
+      setRealId("");
+      setError(null);
+    } catch (e) {
+      setError((e as Error).message);
+    }
+  }
+
+  function clearFilters() {
+    setQuery("");
+    setBatch("");
+    setSort("created_at");
+    setOnlyFlagged(false);
+    setRealId("");
+    setView({});
+  }
+
+  const hasFilters = !!(status || group || query || batch || onlyFlagged);
 
   return (
     <>
-      <PageHeader title="Requests" subtitle="Every request the system has seen, with flags, AI risk and payout status." />
+      <PageHeader title="Requests" subtitle="Triage incoming aid requests, review risk signals and track payment progress." />
       <ErrorNote error={error} />
 
-      <div className="mb-4 flex gap-1 overflow-x-auto border-b border-zinc-200">
-        <Tab active={!status} onClick={() => setStatus(null)}>All</Tab>
-        {STATUSES.map((s) => (
-          <Tab key={s} active={status === s} onClick={() => setStatus(s)}>{STATUS_STYLE[s].label}</Tab>
+      <section aria-label="Request overview" className="mb-6 grid grid-cols-2 gap-3 xl:grid-cols-4">
+        <OverviewCard label="Total requests" value={rows?.length ?? "—"} hint="All received requests" />
+        <OverviewCard label="Needs attention" value={groupCounts.attention ?? "—"} hint="Review or investigate" tone="text-amber-700" />
+        <OverviewCard label="Flagged" value={rows?.filter((r) => r.flags.length > 0).length ?? "—"} hint="At least one risk signal" tone="text-rose-700" />
+        <OverviewCard label="Approved" value={rows?.filter((r) => r.status === "APPROVED").length ?? "—"} hint="Awaiting payout" tone="text-blue-700" />
+      </section>
+
+      <nav aria-label="Request workflow filters" className="dock-strip mb-5 flex gap-1 overflow-x-auto border-b border-zinc-200">
+        <Tab active={!status && !group} onClick={() => setView({})}>
+          All <TabCount value={rows?.length} />
+        </Tab>
+        {GROUPS.map(({ id, label }) => (
+          <Tab key={id} active={group === id && !status} onClick={() => setView({ group: id })}>
+            {label} <TabCount value={groupCounts[id]} />
+          </Tab>
         ))}
-      </div>
+      </nav>
 
       <Card flush>
-        <div className="flex flex-wrap items-center gap-2 border-b border-zinc-100 px-5 py-3">
-          <input value={query} onChange={(e) => setQuery(e.target.value)} placeholder="Search ref, token or wallet"
-            className="input w-full sm:w-64" />
-          <form onSubmit={(e) => { e.preventDefault(); lookup(); }} className="flex items-center gap-1"
-            title="The real ID is hashed on the server to find this person's token. It is not stored.">
-            <input value={realId} onChange={(e) => setRealId(e.target.value)} placeholder="Real beneficiary ID" className="input w-44" />
-            <Button size="sm" variant="ghost">Find</Button>
-          </form>
-          <select value={batch} onChange={(e) => setBatch(e.target.value)} className="input">
-            <option value="">All batches</option>
-            {batches.map((b) => <option key={b} value={b}>{b}</option>)}
-          </select>
-          <select value={sort} onChange={(e) => setSort(e.target.value as SortKey)} className="input">
-            <option value="created_at">Newest first</option>
-            <option value="risk_score">Highest AI risk</option>
-            <option value="amount">Largest amount</option>
-          </select>
-          <label className="flex items-center gap-2 px-1 text-[13px] text-zinc-600">
-            <input type="checkbox" checked={onlyFlagged} onChange={(e) => setOnlyFlagged(e.target.checked)} className="accent-zinc-900" />
-            Flagged only
-          </label>
-          <span className="ml-auto text-[12px] tabular-nums text-zinc-500">{shown.length} shown</span>
+        <div className="border-b border-zinc-100 px-5 py-4">
+          <div className="flex flex-wrap items-center gap-3">
+            <label className="relative min-w-[220px] flex-1 sm:max-w-xl">
+              <span className="sr-only">Search requests</span>
+              <svg aria-hidden viewBox="0 0 20 20" fill="none" className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-zinc-400">
+                <circle cx="8.5" cy="8.5" r="5.5" stroke="currentColor" strokeWidth="1.5" />
+                <path d="m13 13 4 4" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
+              </svg>
+              <input value={query} onChange={(e) => setQuery(e.target.value)}
+                placeholder="Search reference, beneficiary or wallet"
+                className="input h-10 w-full pl-9" />
+            </label>
+            <div className="ml-auto flex items-center gap-3">
+              <span aria-live="polite" className="whitespace-nowrap text-[12px] tabular-nums text-zinc-500">
+                Showing <span className="font-medium text-zinc-800">{shown.length}</span> of {grouped.length}
+              </span>
+              {hasFilters && (
+                <button onClick={clearFilters} className="whitespace-nowrap text-[12px] font-medium text-zinc-600 underline-offset-2 hover:text-zinc-900 hover:underline">
+                  Clear filters
+                </button>
+              )}
+            </div>
+          </div>
+
+          <div className="mt-3 flex flex-wrap items-center gap-2">
+            <select value={status ?? ""} onChange={(e) => setView({ status: (e.target.value as Status) || null })}
+              aria-label="Filter by exact request status" className="input">
+              <option value="">All statuses</option>
+              {STATUSES.map((s) => <option key={s} value={s}>{STATUS_STYLE[s].label}</option>)}
+            </select>
+            <select value={batch} onChange={(e) => setBatch(e.target.value)} aria-label="Filter by batch" className="input">
+              <option value="">All batches</option>
+              {batches.map((b) => <option key={b} value={b}>{b}</option>)}
+            </select>
+            <select value={sort} onChange={(e) => setSort(e.target.value as SortKey)} aria-label="Sort requests" className="input">
+              <option value="created_at">Newest first</option>
+              <option value="risk_score">Highest AI risk</option>
+              <option value="amount">Largest amount</option>
+            </select>
+            <button type="button" role="switch" aria-checked={onlyFlagged} onClick={() => setOnlyFlagged((value) => !value)}
+              className={`ml-auto inline-flex h-8 items-center gap-2 rounded-md px-2.5 text-[13px] transition-colors ${
+                onlyFlagged ? "bg-zinc-900 text-white" : "text-zinc-600 hover:bg-zinc-100"
+              }`}>
+              <span className={`relative h-4 w-7 rounded-full transition-colors ${onlyFlagged ? "bg-white/30" : "bg-zinc-300"}`}>
+                <span className={`absolute top-0.5 h-3 w-3 rounded-full transition-all ${onlyFlagged ? "left-3.5 bg-white" : "left-0.5 bg-white"}`} />
+              </span>
+              Flagged only
+            </button>
+          </div>
+
+          <details className="group mt-3 border-t border-zinc-100 pt-3">
+            <summary className="w-fit cursor-pointer select-none text-[12px] font-medium text-zinc-500 marker:text-zinc-400 hover:text-zinc-900">
+              Advanced filters
+            </summary>
+            <form onSubmit={(e) => { e.preventDefault(); lookup(); }} className="mt-3 flex flex-wrap items-end gap-2"
+              title="The real ID is hashed on the server to find this person's token. It is not stored.">
+              <label className="grid gap-1 text-[11px] text-zinc-500">
+                Search by real beneficiary ID
+                <input value={realId} onChange={(e) => setRealId(e.target.value)} placeholder="Enter beneficiary ID" className="input w-56" />
+              </label>
+              <Button size="sm" variant="secondary" disabled={!realId.trim()}>Find beneficiary</Button>
+              <span className="text-[11px] text-zinc-400">ID is hashed for lookup and not stored.</span>
+            </form>
+          </details>
         </div>
 
         {rows === null && !error ? (
-          <Empty>Loading…</Empty>
-        ) : shown.length === 0 ? (
-          <Empty>No requests match.</Empty>
-        ) : (
+          <div className="px-5 py-14 text-center text-[13px] text-zinc-500">Loading requests…</div>
+        ) : rows?.length === 0 && !error ? (
+          <EmptyState title="No requests yet" description="No requests have been received by the system." />
+        ) : shown.length === 0 && !error ? (
+          <EmptyState title="No matching requests" description="Try adjusting your filters or search terms." action={
+            <button onClick={clearFilters} className="text-[13px] font-medium text-zinc-900 underline underline-offset-4">Clear all filters</button>
+          } />
+        ) : rows && rows.length > 0 ? (
           <div className="overflow-x-auto">
-            <table className="data-table min-w-[1080px]">
+            <table className="data-table min-w-[1180px]">
               <thead>
                 <tr>
-                  <th>Ref</th>
-                  <th>Batch</th>
+                  <th>Request</th>
                   <th>Beneficiary</th>
                   <th className="text-right">Amount</th>
                   <th>AI risk</th>
                   <th>Flags</th>
-                  <th>Status</th>
-                  <th>Reconciliation</th>
-                  <th>Requested</th>
+                  <th>Request status</th>
+                  <th>Payout status</th>
+                  <th>Submitted</th>
+                  <th><span className="sr-only">Action</span></th>
                 </tr>
               </thead>
               <tbody>
                 {shown.map((r) => (
-                  <tr key={r.request_ref} onClick={() => router.push(`/requests/${encodeURIComponent(r.request_ref)}`)}
-                    className="cursor-pointer transition-colors hover:bg-zinc-50">
-                    <td className="whitespace-nowrap font-mono text-[12px] font-medium text-zinc-900">
-                      <Link href={`/requests/${encodeURIComponent(r.request_ref)}`}>{r.request_ref}</Link>
+                  <tr key={r.request_ref} className="transition-colors hover:bg-zinc-50">
+                    <td className="whitespace-nowrap">
+                      <Link href={`/requests/${encodeURIComponent(r.request_ref)}`} className="font-mono text-[12px] font-medium text-zinc-900 hover:underline">
+                        {r.request_ref}
+                      </Link>
+                      {r.batch_id && <div className="mt-1 text-[11px] text-zinc-400">{r.batch_id}</div>}
                     </td>
-                    <td className="whitespace-nowrap text-[12px] text-zinc-500">{r.batch_id ?? "—"}</td>
                     <td className="whitespace-nowrap font-mono text-[12px] text-zinc-600">{r.beneficiary_id}</td>
-                    <td className="text-right font-medium tabular-nums">{formatAmount(r.amount)}</td>
-                    <td><RiskBar score={r.risk_score} /></td>
-                    <td className="max-w-[260px]"><FlagChips flags={r.flags} /></td>
+                    <td className="text-right font-medium tabular-nums">{formatAmount(r.amount)} <span className="text-[11px] font-normal text-zinc-400">{r.asset}</span></td>
+                    <td><RiskLevel score={r.risk_score} /></td>
+                    <td className="max-w-[220px]"><FlagChips flags={r.flags} /></td>
                     <td className="whitespace-nowrap"><StatusBadge status={r.status} /></td>
-                    <td className="whitespace-nowrap"><ReconBadge category={r.recon_status} /></td>
+                    <td><PayoutStatus status={r.status} /></td>
                     <td className="whitespace-nowrap text-[12px] text-zinc-500">{formatTime(r.created_at)}</td>
+                    <td className="whitespace-nowrap text-right">
+                      <Link href={`/requests/${encodeURIComponent(r.request_ref)}`}
+                        className="text-[12px] font-medium text-zinc-700 hover:text-zinc-950 hover:underline">
+                        {r.status === "PENDING_REVIEW" || r.status === "INVALID" || r.status === "HELD" ? "Review" : "View"}
+                      </Link>
+                    </td>
                   </tr>
                 ))}
               </tbody>
             </table>
           </div>
-        )}
+        ) : null}
       </Card>
     </>
+  );
+}
+
+function OverviewCard({ label, value, hint, tone = "text-zinc-900" }: {
+  label: string;
+  value: number | string;
+  hint: string;
+  tone?: string;
+}) {
+  return (
+    <div className="rounded-lg border border-zinc-200 bg-white px-4 py-3.5 shadow-[0_1px_2px_rgba(0,0,0,0.03)]">
+      <div className="text-[11px] font-medium uppercase tracking-[0.06em] text-zinc-500">{label}</div>
+      <div className={`mt-1 text-[23px] font-semibold tracking-tight tabular-nums ${tone}`}>{value}</div>
+      <div className="mt-0.5 text-[12px] text-zinc-400">{hint}</div>
+    </div>
   );
 }
 
 function Tab({ active, onClick, children }: { active: boolean; onClick: () => void; children: React.ReactNode }) {
   return (
     <button onClick={onClick}
-      className={`-mb-px whitespace-nowrap border-b-2 px-2.5 pb-2.5 pt-1 text-[13px] transition-colors ${
+      className={`dock-item -mb-px inline-flex items-center gap-1.5 whitespace-nowrap border-b-2 px-3 pb-3 pt-1.5 text-[13px] transition-[color,border-color,transform] duration-200 ${
         active ? "border-zinc-900 font-medium text-zinc-900" : "border-transparent text-zinc-500 hover:text-zinc-900"}`}>
       {children}
     </button>
+  );
+}
+
+function TabCount({ value }: { value?: number }) {
+  return <span className="text-[11px] tabular-nums text-zinc-400">{value ?? "—"}</span>;
+}
+
+function RiskLevel({ score }: { score: number | null }) {
+  if (score === null) return <span className="text-[12px] text-zinc-400">Not scored</span>;
+  const level = score >= 0.9 ? "High" : score >= 0.7 ? "Medium" : "Low";
+  const style = level === "High" ? "bg-rose-50 text-rose-700"
+    : level === "Medium" ? "bg-amber-50 text-amber-700" : "bg-zinc-100 text-zinc-600";
+  return (
+    <span title={`AI risk score ${score.toFixed(3)}`} className={`inline-flex items-center gap-1.5 whitespace-nowrap rounded-md px-2 py-1 text-[12px] font-medium ${style}`}>
+      <span className="font-mono tabular-nums">{score.toFixed(2)}</span>
+      <span>{level}</span>
+    </span>
+  );
+}
+
+function PayoutStatus({ status }: { status: Status }) {
+  const state: Partial<Record<Status, { label: string; style: string }>> = {
+    APPROVED: { label: "Not paid", style: "text-blue-700" },
+    SUBMITTED: { label: "Submitted", style: "text-indigo-700" },
+    CONFIRMED: { label: "Confirmed", style: "text-emerald-700" },
+    CLAIMED: { label: "Claimed", style: "text-emerald-700" },
+    FAILED: { label: "Failed", style: "text-rose-700" },
+    UNKNOWN: { label: "Unclear", style: "text-amber-700" },
+  };
+  const payout = state[status];
+  if (!payout) return <span className="text-[12px] text-zinc-300">—</span>;
+  return <span className={`whitespace-nowrap text-[12px] font-medium ${payout.style}`}>{payout.label}</span>;
+}
+
+function EmptyState({ title, description, action }: { title: string; description: string; action?: React.ReactNode }) {
+  return (
+    <div className="flex min-h-64 flex-col items-center justify-center px-5 py-12 text-center">
+      <span className="mb-4 grid h-11 w-11 place-items-center rounded-full border border-zinc-200 bg-zinc-50 text-zinc-400">
+        <svg aria-hidden viewBox="0 0 24 24" fill="none" className="h-5 w-5" stroke="currentColor" strokeWidth="1.5">
+          <path strokeLinecap="round" strokeLinejoin="round" d="M7 3.75h7l4.25 4.5v11A1.75 1.75 0 0 1 16.5 21h-9A1.75 1.75 0 0 1 5.75 19.25v-13.75A1.75 1.75 0 0 1 7.5 3.75Z" />
+          <path strokeLinecap="round" d="M14 4v5h4M8.5 13h7m-7 3h7" />
+        </svg>
+      </span>
+      <h2 className="text-[14px] font-semibold text-zinc-900">{title}</h2>
+      <p className="mt-1 max-w-sm text-[13px] text-zinc-500">{description}</p>
+      {action && <div className="mt-4">{action}</div>}
+    </div>
   );
 }
 
