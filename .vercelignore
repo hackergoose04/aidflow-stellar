@@ -1,0 +1,12 @@
+# What `vercel deploy` from a laptop must not upload (Git deploys only see committed files).
+.env
+.env.local
+.venv
+**/__pycache__
+.vercel
+data
+frontend
+contracts
+docs
+scripts
+ml/data
