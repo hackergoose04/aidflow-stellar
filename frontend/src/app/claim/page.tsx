@@ -56,8 +56,9 @@ export default function ClaimPage() {
 
   useEffect(() => {
     get<PublicSummary>("/public/summary").then(setSummary, (e) => setError((e as Error).message));
-    // The kit remembers the last connected wallet in this browser: pick it up without asking again.
-    loadKit().then((kit) => kit.getAddress()).then(({ address }) => address && setAddress(address)).catch(() => { /* not connected before */ });
+    // Always start disconnected: the beneficiary picks their wallet each visit (the page may be on a
+    // shared phone or kiosk, and it makes the demo start clean). Forget whatever the kit remembered.
+    loadKit().then((kit) => kit.disconnect()).catch(() => { /* nothing remembered */ });
   }, []);
 
   const refresh = useCallback(async (addr: string) => {

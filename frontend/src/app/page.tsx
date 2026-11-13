@@ -1,19 +1,85 @@
 "use client";
 
 import Link from "next/link";
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   get, payAll, post, uploadCsv,
-  type ClaimResult, type Delivery, type DeliveryCost, type Summary, type UploadReport, type VerifyResult, type Wallet,
+  type AidRequest, type ClaimResult, type Delivery, type DeliveryCost, type Summary, type UploadReport, type VerifyResult, type Wallet,
 } from "@/lib/api";
-import { formatAmount, formatDuration, formatHours, shortKey } from "@/lib/format";
-import { Button, Card, ErrorNote, Notice, PageHeader, ReviewerInput, Stats, useReviewer } from "@/components/ui";
-import { StatusBreakdown } from "@/components/Charts";
+import { formatDuration, formatHours, shortKey } from "@/lib/format";
+import { Button, ErrorNote, Notice, useReviewer } from "@/components/ui";
 
-export default function Overview() {
+const PAID = new Set(["CONFIRMED", "CLAIMED"]);
+const SENT = new Set(["SUBMITTED", "UNKNOWN", "CONFIRMED", "CLAIMED", "FAILED"]);
+const DAYS = 14;
+
+/** 2980.5 -> "2,980" + ".50": the decimals are drawn lighter, like a bank statement. */
+function Money({ value, unit = true, className = "" }: { value: number; unit?: boolean; className?: string }) {
+  const [whole, cents] = value.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 }).split(".");
+  return (
+    <span className={`tabular-nums ${className}`}>
+      {whole}<span className="text-zinc-400">.{cents}</span>
+      {unit && <span className="ml-1.5 text-[0.45em] font-medium tracking-normal text-zinc-500">AIDUSD</span>}
+    </span>
+  );
+}
+
+function ago(iso: string | null): string {
+  if (!iso) return "—";
+  const s = (Date.now() - new Date(iso).getTime()) / 1000;
+  if (s < 60) return "just now";
+  if (s < 3600) return `${Math.floor(s / 60)} min ago`;
+  if (s < 86400) return `${Math.floor(s / 3600)} h ago`;
+  const d = Math.floor(s / 86400);
+  return d === 1 ? "yesterday" : `${d} days ago`;
+}
+
+/** Beneficiaries are pseudonymous (H-<hash>) so no personal data reaches the chain; show a short,
+ * stable handle and a colour derived from it. Readable ids like BEN-ALICE become "Alice". */
+const AVATAR = ["bg-blue-50 text-blue-700", "bg-amber-50 text-amber-800", "bg-emerald-50 text-emerald-800", "bg-violet-50 text-violet-700", "bg-rose-50 text-rose-700"];
+function person(id: string): { name: string; mark: string; tone: string } {
+  const hash = id.match(/^H-([0-9a-f]+)$/i)?.[1];
+  const tone = AVATAR[[...id].reduce((n, c) => n + c.charCodeAt(0), 0) % AVATAR.length];
+  if (hash) return { name: `Recipient ${hash.slice(0, 6)}`, mark: hash.slice(0, 2).toUpperCase(), tone };
+  const n = id.replace(/^BEN-/i, "").replace(/[-_]+/g, " ").toLowerCase().replace(/\b\w/g, (c) => c.toUpperCase());
+  return { name: n, mark: n.slice(0, 2).toUpperCase(), tone };
+}
+
+function paymentState(r: AidRequest): { label: string; tone: string } {
+  const ok = "bg-emerald-50 text-emerald-800";
+  if (r.status === "CLAIMED") return { label: "Collected", tone: ok };
+  if (r.status === "CONFIRMED") return r.method === "payment"
+    ? { label: "In wallet", tone: ok }
+    : { label: "Waiting to collect", tone: "bg-zinc-100 text-zinc-700" };
+  if (r.status === "FAILED") return r.registry_status === "BLOCKED"
+    ? { label: "Stopped · duplicate", tone: "bg-rose-50 text-rose-800" }
+    : { label: "Failed", tone: "bg-rose-50 text-rose-800" };
+  return { label: "Sending", tone: "bg-blue-50 text-blue-800" };
+}
+
+/** Money that reached people, per day, for the last DAYS days (today last). */
+function deliveredByDay(rows: AidRequest[]): { day: Date; amount: number }[] {
+  const start = new Date();
+  start.setHours(0, 0, 0, 0);
+  const days = Array.from({ length: DAYS }, (_, i) => {
+    const d = new Date(start);
+    d.setDate(d.getDate() - (DAYS - 1 - i));
+    return { day: d, amount: 0 };
+  });
+  for (const r of rows) {
+    if (!PAID.has(r.status) || !r.submitted_at) continue;
+    const t = new Date(r.submitted_at);
+    t.setHours(0, 0, 0, 0);
+    const i = Math.round((t.getTime() - days[0].day.getTime()) / 86400000);
+    if (i >= 0 && i < DAYS) days[i].amount += Number(r.amount);
+  }
+  return days;
+}
+
+export default function Home() {
   const [summary, setSummary] = useState<Summary | null>(null);
+  const [rows, setRows] = useState<AidRequest[] | null>(null);
   const [wallet, setWallet] = useState<Wallet | null>(null);
-  const [walletError, setWalletError] = useState<string | null>(null);
   const [delivery, setDelivery] = useState<Delivery | null>(null);
   const [cost, setCost] = useState<DeliveryCost | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -21,21 +87,22 @@ export default function Overview() {
   const [progress, setProgress] = useState("");
   const [message, setMessage] = useState<React.ReactNode>(null);
   const [upload, setUpload] = useState<UploadReport | null>(null);
-  const [reviewer, setReviewer] = useReviewer();
+  const [reviewer] = useReviewer();
   const fileRef = useRef<HTMLInputElement>(null);
 
   const refresh = useCallback(async () => {
     try {
-      setSummary(await get<Summary>("/summary"));
+      const [s, r] = await Promise.all([get<Summary>("/summary"), get<AidRequest[]>("/requests")]);
+      setSummary(s);
+      setRows(r);
       setError(null);
     } catch (e) {
       setError((e as Error).message);
     }
-    get<Wallet>("/wallet").then(setWallet, (e) => setWalletError((e as Error).message));
+    get<Wallet>("/wallet").then(setWallet, () => setWallet(null));
     get<Delivery>("/delivery").then(setDelivery, () => setDelivery(null));
     get<DeliveryCost>("/delivery/cost").then(setCost, () => setCost(null));
   }, []);
-
   useEffect(() => { refresh(); }, [refresh]);
 
   async function run<T>(label: string, fn: () => Promise<T>, done: (r: T) => React.ReactNode) {
@@ -52,264 +119,305 @@ export default function Overview() {
     }
   }
 
+  const all = useMemo(() => rows ?? [], [rows]);
   const s = summary?.by_status;
-  const pendingClean = s ? s.PENDING_REVIEW - (summary?.pending_flagged ?? 0) : 0;
-  const total = s ? Object.values(s).reduce((a, b) => a + b, 0) : 0;
-  const needsReview = (summary?.pending_flagged ?? 0) + (s?.HELD ?? 0) + (s?.INVALID ?? 0);
+  const flagged = (summary?.pending_flagged ?? 0) + (s?.HELD ?? 0) + (s?.INVALID ?? 0);
+  const clean = s ? s.PENDING_REVIEW - (summary?.pending_flagged ?? 0) : 0;
+  const approvedRows = all.filter((r) => r.status === "APPROVED");
+  const approvedAmount = approvedRows.reduce((n, r) => n + Number(r.amount), 0);
+  const inFlight = (s?.SUBMITTED ?? 0) + (s?.UNKNOWN ?? 0);
+  const unclaimed = delivery?.unclaimed ?? [];
+  const mismatches = summary?.recon.MISMATCH ?? 0;
+
+  const paidRows = all.filter((r) => PAID.has(r.status));
+  const paidAmount = paidRows.reduce((n, r) => n + Number(r.amount), 0);
+  const paidPeople = new Set(paidRows.map((r) => r.beneficiary_id)).size;
+  const days = useMemo(() => deliveredByDay(all), [all]);
+  const today = days[days.length - 1].amount;
+  const stopped = summary?.registry.BLOCKED ?? 0;
+  const recent = all.filter((r) => SENT.has(r.status))
+    .sort((a, b) => (b.submitted_at ?? b.updated_at).localeCompare(a.submitted_at ?? a.updated_at))
+    .slice(0, 8);
+
+  const tasks: { key: string; tone: string; title: React.ReactNode; detail: string; action: React.ReactNode }[] = [];
+  if (flagged) tasks.push({
+    key: "review", tone: "bg-amber-500",
+    title: <><b>{flagged}</b> {flagged === 1 ? "request needs" : "requests need"} a decision</>,
+    detail: "Flagged by a rule or the AI model. Nothing is paid until a person approves it.",
+    action: <Link href="/review"><Button size="sm">Review</Button></Link>,
+  });
+  if (clean > 0) tasks.push({
+    key: "clean", tone: "bg-emerald-500",
+    title: <><b>{clean}</b> {clean === 1 ? "request" : "requests"} passed every check</>,
+    detail: reviewer.trim() ? `Approve them in one step as ${reviewer.trim()}.` : "Enter your name at the top right to approve them.",
+    action: <Button size="sm" variant="secondary" disabled={!!busy || !reviewer.trim()}
+      onClick={() => run("approve", () => post<{ approved: number }>("/review/approve-clean", { reviewer }),
+        (r) => `Approved ${r.approved} requests.`)}>Approve all</Button>,
+  });
+  if (inFlight) tasks.push({
+    key: "verify", tone: "bg-blue-400",
+    title: <><b>{inFlight}</b> {inFlight === 1 ? "payment is" : "payments are"} awaiting confirmation</>,
+    detail: "Look them up on Stellar by transaction hash.",
+    action: <VerifyButton busy={busy} run={run} label="Verify" />,
+  });
+  if (unclaimed.length) tasks.push({
+    key: "claims", tone: unclaimed.some((u) => u.overdue) ? "bg-rose-500" : "bg-zinc-400",
+    title: <><b>{unclaimed.length}</b> {unclaimed.length === 1 ? "payment hasn't" : "payments haven't"} been collected yet</>,
+    detail: `Oldest has waited ${formatHours(unclaimed[0].waiting_hours)}. Uncollected money returns to you after 30 days.`,
+    action: <VerifyButton busy={busy} run={run} label="Check now" />,
+  });
+  if (mismatches) tasks.push({
+    key: "recon", tone: "bg-rose-500",
+    title: <><b>{mismatches}</b> {mismatches === 1 ? "payment doesn't" : "payments don't"} match the chain</>,
+    detail: "Our record and Stellar disagree. Someone should look at it.",
+    action: <Link href="/recon?run=1"><Button size="sm" variant="secondary">Investigate</Button></Link>,
+  });
+
+  function send() {
+    run("pay", () => {
+      const total = approvedRows.length;
+      setProgress(`0 of ${total}`);
+      return payAll(async (done) => { setProgress(`${Math.min(done, total)} of ${total}`); await refresh(); });
+    }, (r) => {
+      const ok = r.filter((x) => x.status === "CONFIRMED").length;
+      const blocked = r.filter((x) => x.status === "FAILED").length;
+      return <>Sent {ok} {ok === 1 ? "payment" : "payments"}{blocked ? `, ${blocked} stopped as duplicate` : ""}.</>;
+    });
+  }
+
+  const balance = wallet ? Number(wallet.balances.AIDUSD ?? 0) : null;
+  const toHand = delivery?.timing.approved_to_hand;
 
   return (
     <>
       <input ref={fileRef} type="file" accept=".csv,text/csv" className="hidden"
         onChange={(e) => {
           const f = e.target.files?.[0];
-          if (f) run("upload", () => uploadCsv(f), (r) => { setUpload(r); return `Uploaded ${f.name}.`; });
+          // Nothing accepted is not a success: the warning below explains why, so no green message.
+          if (f) run("upload", () => uploadCsv(f), (r) => {
+            setUpload(r);
+            return r.accepted ? `Uploaded ${f.name}: ${r.accepted} ${r.accepted === 1 ? "request" : "requests"} added.` : null;
+          });
           e.target.value = "";
         }} />
-      <PageHeader
-        eyebrow={summary?.registry.program ?? "Aid programme"}
-        title="Overview"
-        action={<ReviewerInput value={reviewer} onChange={setReviewer} compact />}
-      />
+      <h1 className="sr-only">Home</h1>
+
       <ErrorNote error={error} />
       {message && <Notice tone="success">{message}</Notice>}
-      {upload && <UploadResult report={upload} />}
-
-      <Stats items={[
-        { label: "NGO balance", value: wallet ? formatAmount(wallet.balances.AIDUSD ?? 0) : "—", hint: "AIDUSD available" },
-        { label: "Paid out", value: (s?.CONFIRMED ?? 0) + (s?.CLAIMED ?? 0), hint: `${s?.CLAIMED ?? 0} claimed by beneficiary` },
-        { label: "Pending or failed", value: (s?.SUBMITTED ?? 0) + (s?.UNKNOWN ?? 0) + (s?.FAILED ?? 0), hint: "need attention",
-          tone: (s?.FAILED ?? 0) + (s?.UNKNOWN ?? 0) ? "text-rose-600" : undefined },
-      ]} />
-
-      <Card title="Pipeline" action="Nothing is paid until a person approves it" flush className="mb-6">
-        <div className="grid sm:grid-cols-2 lg:grid-cols-5">
-          <Step n={1} title="Upload" count={total} caption="validated and screened">
-            <Button size="sm" variant="secondary" onClick={() => fileRef.current?.click()} disabled={!!busy}>
-              {busy === "upload" ? "Uploading…" : "Choose CSV"}
-            </Button>
-          </Step>
-          <Step n={2} title="Review" count={needsReview}
-            caption={<>need a person · <Link href="/review" className="link">open queue</Link></>}>
-            <Button size="sm" disabled={!!busy || !pendingClean || !reviewer.trim()}
-              title={!reviewer.trim() ? "Enter your name as reviewer first" : undefined}
-              onClick={() => run("approve", () => post<{ approved: number }>("/review/approve-clean", { reviewer }),
-                (r) => `Approved ${r.approved} requests with no flags.`)}>
-              Approve {pendingClean} clean
-            </Button>
-          </Step>
-          <Step n={3} title="Pay" count={s?.APPROVED ?? 0} caption="approved, ready to send">
-            <Button size="sm" disabled={!!busy || !s?.APPROVED}
-              onClick={() => run("pay", () => {
-                const total = s?.APPROVED ?? 0;
-                setProgress(`0 of ${total}`);
-                return payAll(async (done) => { setProgress(`${Math.min(done, total)} of ${total}`); await refresh(); });
-              }, (r) => {
-                const ok = r.filter((x) => x.status === "CONFIRMED").length;
-                return <>Sent {r.length}: {ok} confirmed. <Link className="link" href="/payouts">See payouts</Link></>;
-              })}>
-              {busy === "pay" ? `Paying ${progress}…` : "Run payouts"}
-            </Button>
-          </Step>
-          <Step n={4} title="Verify" count={(s?.SUBMITTED ?? 0) + (s?.UNKNOWN ?? 0)} caption="awaiting chain result">
-            <Button size="sm" variant="secondary" disabled={!!busy}
-              onClick={() => run("verify", async () => ({
-                v: await post<VerifyResult[]>("/payouts/verify"),
-                c: await post<ClaimResult[]>("/payouts/claims"),
-              }), ({ v, c }) => `Verified ${v.length} unclear transactions. ${c.filter((x) => x.claim_status === "CLAIMED").length} of ${c.length} claimable balances picked up.`)}>
-              {busy === "verify" ? "Checking…" : "Verify"}
-            </Button>
-          </Step>
-          <Step n={5} title="Reconcile" count={summary?.recon.MISMATCH ?? 0} caption="mismatches with the chain"
-            alert={!!summary?.recon.MISMATCH}>
-            <Link href="/recon?run=1"><Button size="sm" variant="secondary">Run</Button></Link>
-          </Step>
-        </div>
-      </Card>
-
-      {delivery && (delivery.timing.approved_to_chain.n > 0 || delivery.unclaimed.length > 0) && <LastMile d={delivery} cost={cost} />}
-
-      <div className="mb-6 grid items-start gap-6 lg:grid-cols-3">
-        <Card title="Requests by status" action={<Link href="/evaluation" className="link">Charts and model evaluation →</Link>} className="lg:col-span-2">
-          {s && <StatusBreakdown counts={s} />}
-        </Card>
-        <Card title="Accounts on Stellar">
-          {wallet ? (
-            <dl className="flex flex-col gap-4 text-[13px]">
-              <div>
-                <dt className="text-zinc-500">NGO wallet</dt>
-                <dd className="mt-0.5 flex items-baseline justify-between gap-2">
-                  <a href={wallet.explorer} target="_blank" rel="noreferrer" className="link font-mono text-[12px]">{shortKey(wallet.account, 6)} ↗</a>
-                  <span className="tabular-nums text-zinc-500">{formatAmount(Number(wallet.balances.XLM ?? 0).toFixed(0))} XLM</span>
-                </dd>
-              </div>
-              {summary?.registry.enabled && (
-                <div className="border-t border-zinc-100 pt-4">
-                  <dt className="text-zinc-500">Payout registry · Soroban</dt>
-                  <dd className="mt-0.5">
-                    {summary.registry.explorer && (
-                      <a href={summary.registry.explorer} target="_blank" rel="noreferrer" className="link font-mono text-[12px]">
-                        {shortKey(summary.registry.contract, 6)} ↗
-                      </a>
-                    )}
-                    <div className="mt-3 grid grid-cols-3 gap-2">
-                      {([["Paid", summary.registry.PAID], ["Blocked", summary.registry.BLOCKED], ["Reserved", summary.registry.RESERVED]] as const).map(([k, v]) => (
-                        <div key={k} className="rounded-md bg-zinc-50 px-2.5 py-2">
-                          <div className="text-[16px] font-semibold tabular-nums text-zinc-900">{v ?? 0}</div>
-                          <div className="text-[11px] text-zinc-500">{k}</div>
-                        </div>
-                      ))}
-                    </div>
-                    <p className="mt-3 text-[12px] leading-relaxed text-zinc-500">Blocks repeat payments in the same payout slot.</p>
-                  </dd>
-                </div>
-              )}
-            </dl>
+      {upload && upload.rejected.length > 0 && (
+        <Notice tone="warning">
+          {upload.accepted === 0 && upload.rejected.every((r) => r.reasons.includes("duplicate_ref")) ? (
+            <>Nothing new: all {upload.rejected.length} rows in this file were uploaded before. Duplicates are never added twice.</>
           ) : (
-            <p className="text-[13px] text-zinc-500">{walletError ?? "Loading…"}</p>
+            <>
+              {upload.rejected.length} {upload.rejected.length === 1 ? "row was" : "rows were"} not accepted:{" "}
+              {upload.rejected.slice(0, 3).map((r) => `line ${r.line} (${r.reasons.join(", ").replaceAll("_", " ").replace("duplicate ref", "already uploaded")})`).join("; ")}
+              {upload.rejected.length > 3 && "…"}
+            </>
           )}
-        </Card>
-      </div>
+        </Notice>
+      )}
+
+      {/* Balance and what has reached people */}
+      <section className="flex flex-wrap gap-6">
+        <div className="flex min-w-0 flex-[1_1_340px] flex-col rounded-2xl border border-zinc-200 bg-white p-7">
+          <div className="text-[13px] text-zinc-500">Available to disburse</div>
+          <div className="mt-2 text-[44px] font-semibold leading-none tracking-[-0.03em] text-zinc-900">
+            {balance !== null ? <Money value={balance} /> : <span className="text-zinc-300">—</span>}
+          </div>
+          <div className="mt-3 text-[13px] text-zinc-500">
+            {(summary?.registry.program ?? "Aid programme").replace(/-\d{4}-\d{4}$/, "")}
+            {wallet && <> · <a href={wallet.explorer} target="_blank" rel="noreferrer" className="link font-mono text-[12px]">{shortKey(wallet.account, 4)} ↗</a></>}
+          </div>
+          <div className="mt-auto flex flex-wrap gap-2.5 pt-7">
+            <Button className="h-11 px-5 text-[14px]" onClick={() => fileRef.current?.click()} disabled={!!busy}>
+              {busy === "upload" ? "Uploading…" : "New batch"}
+            </Button>
+            <Button variant="secondary" className="h-11 px-5 text-[14px]" onClick={send} disabled={!!busy || !approvedRows.length}
+              title={approvedRows.length ? `${approvedAmount.toFixed(2)} AIDUSD, about 15 seconds per payment` : "Nothing approved to send"}>
+              {busy === "pay" ? `Sending ${progress}…` : `Send approved${approvedRows.length ? ` · ${approvedRows.length}` : ""}`}
+            </Button>
+          </div>
+        </div>
+
+        <div className="min-w-0 flex-[2_1_520px] rounded-2xl border border-zinc-200 bg-white px-7 pt-6 pb-5">
+          <div className="text-[13px] text-zinc-500">Delivered to people</div>
+          <div className="mt-1.5 flex flex-wrap items-baseline gap-x-3 text-[26px] font-semibold tracking-[-0.02em] text-zinc-900">
+            <Money value={paidAmount} />
+            <span className="text-[13px] font-medium tracking-normal text-zinc-500">
+              {paidPeople} {paidPeople === 1 ? "person" : "people"}
+              {today > 0 && <span className="ml-2 text-emerald-700">+{today.toLocaleString("en-US", { maximumFractionDigits: 2 })} today</span>}
+            </span>
+          </div>
+          <DayBars days={days} />
+        </div>
+      </section>
+
+      {/* Key figures in one strip */}
+      <section className="mt-6 grid overflow-hidden rounded-2xl border border-zinc-200 bg-white sm:grid-cols-2 lg:grid-cols-4">
+        <Figure label="Approval → money in hand"
+          value={toHand?.n ? formatDuration(toHand.median_s) : "—"}
+          note={toHand?.n ? `median of ${toHand.n} · bank transfers take days` : "no payments in hand yet"} />
+        <Figure label="Fees per payout"
+          value={cost?.payouts ? <>${(cost.avg_fee_usd ?? 0).toFixed(3)} <span className="text-[13px] font-medium text-zinc-500">{((cost.cost_share ?? 0) * 100).toFixed(2)}%</span></> : "—"}
+          note={cost?.payouts ? "of the amount · remittances average 6.4%" : cost ? "no payments yet" : "reading fees from Stellar…"} />
+        <Figure label="Duplicates stopped" value={String(stopped)} note="blocked by the on-chain registry" />
+        {summary?.last_recon ? (
+          <Figure label="Records vs Stellar"
+            value={mismatches
+              ? <span className="text-rose-700">{mismatches} mismatch{mismatches === 1 ? "" : "es"}</span>
+              : <span className="inline-flex items-center gap-2"><Check />All match</span>}
+            note={`checked ${ago(summary.last_recon)}`} />
+        ) : (
+          <Figure label="Records vs Stellar" value={<span className="text-zinc-400">Not checked</span>}
+            note={<Link href="/recon?run=1" className="link">Run the check →</Link>} />
+        )}
+      </section>
+
+      {tasks.length > 0 && (
+        <section className="mt-8">
+          <h2 className="mb-3 text-[16px] font-semibold text-zinc-900">Needs your attention</h2>
+          <ul className="divide-y divide-zinc-100 overflow-hidden rounded-2xl border border-zinc-200 bg-white">
+            {tasks.map((t) => (
+              <li key={t.key} className="flex items-center gap-4 px-6 py-4">
+                <span className={`h-2 w-2 shrink-0 rounded-full ${t.tone}`} />
+                <div className="min-w-0 flex-1">
+                  <div className="text-[14px] text-zinc-900 [&_b]:font-semibold">{t.title}</div>
+                  <div className="mt-0.5 text-[13px] text-zinc-500">{t.detail}</div>
+                </div>
+                <div className="shrink-0">{t.action}</div>
+              </li>
+            ))}
+          </ul>
+        </section>
+      )}
+
+      <section className="mt-8">
+        <div className="mb-3 flex items-center justify-between gap-3">
+          <h2 className="text-[16px] font-semibold text-zinc-900">Recent payments</h2>
+          <Link href="/payouts" className="link text-[13px]">View all →</Link>
+        </div>
+        <div className="overflow-x-auto rounded-2xl border border-zinc-200 bg-white">
+          {rows === null ? (
+            <div className="px-6 py-10 text-[14px] text-zinc-500">Loading…</div>
+          ) : recent.length ? (
+            <table className="w-full min-w-[720px] text-left text-[14px]">
+              <thead>
+                <tr className="text-[12px] text-zinc-500">
+                  <th className="border-b border-zinc-100 py-3 pr-3 pl-6 font-medium">Recipient</th>
+                  <th className="border-b border-zinc-100 px-3 py-3 font-medium">Batch</th>
+                  <th className="border-b border-zinc-100 px-3 py-3 font-medium">Status</th>
+                  <th className="border-b border-zinc-100 px-3 py-3 font-medium">When</th>
+                  <th className="border-b border-zinc-100 py-3 pr-6 pl-3 text-right font-medium">Amount</th>
+                </tr>
+              </thead>
+              <tbody>
+                {recent.map((r) => {
+                  const st = paymentState(r);
+                  const who = person(r.beneficiary_id);
+                  return (
+                    <tr key={r.request_ref} className="group border-b border-zinc-50 last:border-0 hover:bg-zinc-50/70">
+                      <td className="py-3.5 pr-3 pl-6">
+                        <Link href={`/requests/${encodeURIComponent(r.request_ref)}`} className="flex items-center gap-3">
+                          <span className={`grid h-8 w-8 shrink-0 place-items-center rounded-full font-mono text-[11px] font-semibold ${who.tone}`}>
+                            {who.mark}
+                          </span>
+                          <span className="min-w-0">
+                            <span className="block font-medium text-zinc-900 group-hover:underline">{who.name}</span>
+                            <span className="block font-mono text-[12px] text-zinc-400">{shortKey(r.wallet, 4)}</span>
+                          </span>
+                        </Link>
+                      </td>
+                      <td className="px-3 py-3.5 text-zinc-600">{r.batch_id ?? "—"}</td>
+                      <td className="px-3 py-3.5">
+                        <span className={`inline-flex h-6 items-center whitespace-nowrap rounded-full px-2.5 text-[12px] font-medium ${st.tone}`}>{st.label}</span>
+                      </td>
+                      <td className="px-3 py-3.5 whitespace-nowrap text-zinc-600">{ago(r.claimed_at ?? r.submitted_at ?? r.updated_at)}</td>
+                      <td className="py-3.5 pr-6 pl-3 text-right font-medium text-zinc-900">
+                        <Money value={Number(r.amount)} unit={false} />
+                        <span className="ml-1.5 text-[12px] font-normal text-zinc-400">AIDUSD</span>
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          ) : (
+            <div className="px-6 py-12 text-center text-[14px] text-zinc-500">
+              No payments yet. <button className="link" onClick={() => fileRef.current?.click()}>Upload a batch</button> to get started.
+            </div>
+          )}
+        </div>
+      </section>
     </>
   );
 }
 
-function Step({ n, title, count, caption, alert = false, children }: {
-  n: number; title: string; count: number; caption: React.ReactNode; alert?: boolean; children: React.ReactNode;
+/** One bar per day; empty days get a thin grey stub so the axis still reads. Hover shows the day's figure. */
+function DayBars({ days }: { days: { day: Date; amount: number }[] }) {
+  const max = Math.max(...days.map((d) => d.amount), 1);
+  const fmt = (d: Date) => d.toLocaleDateString("en-GB", { day: "numeric", month: "short" });
+  return (
+    <figure className="mt-5" aria-label={`AIDUSD delivered per day, last ${days.length} days`}>
+      <div className="relative flex h-36 items-end gap-[6px] border-b border-zinc-200">
+        {[0.33, 0.66, 1].map((y) => (
+          <span key={y} className="pointer-events-none absolute inset-x-0 border-t border-zinc-100" style={{ bottom: `${y * 100}%` }} />
+        ))}
+        {days.map((d, i) => {
+          const last = i === days.length - 1;
+          return (
+            <div key={i} className="group relative flex h-full flex-1 items-end">
+              <span className={`block w-full rounded-t-[4px] ${d.amount ? "bg-accent" : "bg-zinc-200"}`}
+                style={{ height: d.amount ? `${Math.max((d.amount / max) * 100, 4)}%` : 3 }} />
+              <span className="pointer-events-none absolute bottom-full left-1/2 z-10 mb-2 -translate-x-1/2 whitespace-nowrap rounded-md bg-zinc-900 px-2 py-1 text-[11px] text-white opacity-0 shadow transition-opacity group-hover:opacity-100">
+                {last ? "Today" : fmt(d.day)} · {d.amount.toLocaleString("en-US", { maximumFractionDigits: 2 })} AIDUSD
+              </span>
+            </div>
+          );
+        })}
+      </div>
+      <figcaption className="mt-2 flex justify-between text-[11px] text-zinc-400">
+        <span>{fmt(days[0].day)}</span>
+        <span>{fmt(days[Math.floor(days.length / 2)].day)}</span>
+        <span>Today</span>
+      </figcaption>
+    </figure>
+  );
+}
+
+function Figure({ label, value, note }: { label: string; value: React.ReactNode; note: React.ReactNode }) {
+  return (
+    <div className="border-zinc-100 px-6 py-5 max-lg:border-b sm:max-lg:odd:border-r lg:border-r lg:last:border-r-0 max-sm:last:border-b-0 sm:max-lg:[&:nth-last-child(-n+2)]:border-b-0">
+      <div className="text-[13px] text-zinc-500">{label}</div>
+      <div className="mt-1.5 text-[22px] font-semibold tracking-[-0.01em] tabular-nums text-zinc-900">{value}</div>
+      <div className="mt-1 text-[12px] text-zinc-500">{note}</div>
+    </div>
+  );
+}
+
+function Check() {
+  return (
+    <svg viewBox="0 0 16 16" className="h-[18px] w-[18px] text-emerald-700" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+      <path d="m3.5 8.5 3 3 6-7" />
+    </svg>
+  );
+}
+
+function VerifyButton({ busy, run, label }: {
+  busy: string | null;
+  run: <T>(label: string, fn: () => Promise<T>, done: (r: T) => React.ReactNode) => Promise<void>;
+  label: string;
 }) {
   return (
-    <div className="flex min-w-0 flex-col border-zinc-100 px-5 py-4 max-lg:border-b lg:border-l lg:first:border-l-0">
-      <div className="flex items-center gap-2 text-[12px] text-zinc-500">
-        <span className="font-mono text-zinc-400">0{n}</span>{title}
-      </div>
-      <div className={`mt-2 text-[26px] font-semibold leading-none tracking-tight tabular-nums ${alert ? "text-rose-600" : "text-zinc-900"}`}>{count}</div>
-      <div className="mt-1.5 flex-1 text-[12px] text-zinc-500">{caption}</div>
-      <div className="mt-4 flex flex-wrap gap-2">{children}</div>
-    </div>
-  );
-}
-
-/** The Problem Space goal: shorten "decided to pay" -> "money in hand", and treat arrival as the start. */
-function LastMile({ d, cost }: { d: Delivery; cost: DeliveryCost | null }) {
-  const t = d.timing;
-  const legs = t.legs;
-  // Sequential blue, light -> dark along the journey (validated with the dataviz palette script).
-  const journey = legs ? [
-    { label: "Approval → sent", value: legs.approve_to_send, color: "#60a5fa" },
-    { label: "Sent → final on chain", value: legs.send_to_chain, color: "#2563eb" },
-    { label: "On chain → in hand", value: legs.chain_to_hand, color: "#1e3a8a" },
-  ] : [];
-  const bench = [
-    { label: "Global average", value: cost?.benchmark ?? 0.064, emphasis: false },
-    { label: "UN target", value: cost?.target ?? 0.03, emphasis: false },
-    { label: "AidFlow", value: cost?.cost_share ?? 0, emphasis: true },
-  ];
-  const arr = d.arrival;
-  const overdue = arr?.overdue ?? d.unclaimed.filter((u) => u.overdue).length;
-  // Status hues: good / warning / serious, plus a neutral for money that came back.
-  const where = arr ? [
-    { label: "In the beneficiary's hands", value: arr.in_hand, color: "#15803d" },
-    { label: `Waiting to be claimed`, value: arr.waiting, color: "#f59e0b" },
-    { label: `Waiting over ${formatHours(d.alert_hours)}`, value: arr.overdue, color: "#e11d48" },
-    { label: "Returned to the NGO", value: arr.returned, color: "#71717a" },
-  ] : [];
-
-  return (
-    <Card title="From decision to money in hand" action={<Link href="/payouts" className="link">Payouts →</Link>} flush className="mb-6">
-      <div className="grid sm:grid-cols-3">
-        <Panel label="Approval → money in hand" value={t.approved_to_hand.n ? formatDuration(t.approved_to_hand.median_s) : "—"}
-          line={t.approved_to_hand.n ? `median of ${t.approved_to_hand.n} payouts · typical aid disbursement: weeks` : `${t.not_in_hand_yet} sent, waiting to be claimed`}>
-          {journey.some((l) => l.value !== null) && (
-            <Split parts={journey.map((l) => ({ ...l, value: l.value ?? 0 }))} format={(v) => formatDuration(v)} />
-          )}
-        </Panel>
-
-        <Panel label="Network cost per payout" value={cost?.payouts ? `${((cost.cost_share ?? 0) * 100).toFixed(2)}%` : "—"}
-          line={cost?.payouts ? `of the amount delivered · ≈ $${(cost.avg_fee_usd ?? 0).toFixed(3)} each` : cost ? "No payouts yet" : "Reading fees from Stellar…"}>
-          {cost?.payouts ? (
-            <ul className="mt-4 flex flex-col gap-2.5">
-              {bench.map((b) => (
-                <li key={b.label} className="grid grid-cols-[6.5rem_1fr_3rem] items-center gap-2 text-[12px]" title={`${b.label}: ${(b.value * 100).toFixed(2)}% of the amount`}>
-                  <span className={b.emphasis ? "font-medium text-zinc-900" : "text-zinc-500"}>{b.label}</span>
-                  <span className="h-2 overflow-hidden rounded-full bg-zinc-100">
-                    <span className="block h-full rounded-full" style={{
-                      width: `${(b.value / Math.max(...bench.map((x) => x.value))) * 100}%`, minWidth: 4,
-                      background: b.emphasis ? "#2563eb" : "#d4d4d8",
-                    }} />
-                  </span>
-                  <span className={`text-right tabular-nums ${b.emphasis ? "font-medium text-zinc-900" : "text-zinc-500"}`}>{(b.value * 100).toFixed(b.emphasis ? 2 : 1)}%</span>
-                </li>
-              ))}
-            </ul>
-          ) : null}
-        </Panel>
-
-        <Panel label="Sent, not yet received" value={d.unclaimed.length} tone={overdue ? "text-rose-600" : undefined}
-          line={overdue ? `${overdue} waiting over ${formatHours(d.alert_hours)}: follow up` : `none waiting over ${formatHours(d.alert_hours)} · unclaimed money returns after 30 days`}>
-          {arr && where.some((w) => w.value > 0) && <Split parts={where} format={(v) => String(v)} />}
-        </Panel>
-      </div>
-    </Card>
-  );
-}
-
-function Panel({ label, value, line, tone, children }: {
-  label: string; value: React.ReactNode; line: string; tone?: string; children?: React.ReactNode;
-}) {
-  return (
-    <div className="border-zinc-100 px-5 py-4 max-sm:border-t max-sm:first:border-t-0 sm:border-l sm:first:border-l-0">
-      <div className="text-[12px] text-zinc-500">{label}</div>
-      <div className={`mt-1 text-[26px] font-semibold leading-none tracking-tight ${tone ?? "text-zinc-900"}`}>{value}</div>
-      <div className="mt-2 text-[12px] text-zinc-500">{line}</div>
-      {children}
-    </div>
-  );
-}
-
-/** One whole split into parts: a thin segmented bar, figures listed beside it (never on the bar). */
-function Split({ parts, format }: { parts: { label: string; value: number; color: string }[]; format: (v: number) => string }) {
-  const total = parts.reduce((n, p) => n + p.value, 0) || 1;
-  return (
-    <div className="mt-4">
-      <div className="flex h-2 gap-[2px] overflow-hidden rounded-full" role="img"
-        aria-label={parts.map((p) => `${p.label}: ${format(p.value)}`).join(", ")}>
-        {parts.filter((p) => p.value > 0).map((p) => (
-          <span key={p.label} title={`${p.label}: ${format(p.value)}`}
-            style={{ flexGrow: p.value / total, flexBasis: 0, minWidth: 4, background: p.color }} />
-        ))}
-      </div>
-      <ul className="mt-2.5 flex flex-col gap-1 text-[12px]">
-        {parts.map((p) => (
-          <li key={p.label} className={`flex items-center gap-2 ${p.value ? "" : "opacity-40"}`}>
-            <span className="h-2 w-2 shrink-0 rounded-[2px]" style={{ background: p.color }} />
-            <span className="flex-1 truncate text-zinc-500">{p.label}</span>
-            <span className="tabular-nums font-medium text-zinc-900">{format(p.value)}</span>
-          </li>
-        ))}
-      </ul>
-    </div>
-  );
-}
-
-function UploadResult({ report }: { report: UploadReport }) {
-  return (
-    <Card title="Upload result" className="mb-6" flush
-      action={<span className="tabular-nums">{report.received} received · {report.accepted} accepted · {report.flagged.length} flagged · {report.rejected.length} rejected</span>}>
-      {report.rejected.length > 0 ? (
-        <div className="overflow-x-auto">
-          <table className="data-table">
-            <thead><tr><th>Line</th><th>Ref</th><th>Why rejected</th></tr></thead>
-            <tbody>
-              {report.rejected.map((r) => (
-                <tr key={`${r.line}`}>
-                  <td className="tabular-nums">{r.line}</td>
-                  <td className="font-mono text-[12px]">{r.request_ref ?? "—"}</td>
-                  <td className="text-rose-600">{r.reasons.join(", ").replaceAll("_", " ")}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-      ) : <div className="px-5 py-3 text-[13px] text-zinc-500">Every row passed validation.</div>}
-    </Card>
+    <Button size="sm" variant="secondary" disabled={!!busy}
+      onClick={() => run("verify", async () => ({
+        v: await post<VerifyResult[]>("/payouts/verify"),
+        c: await post<ClaimResult[]>("/payouts/claims"),
+      }), ({ c }) => {
+        const got = c.filter((x) => x.claim_status === "CLAIMED").length;
+        return got ? `${got} ${got === 1 ? "beneficiary has" : "beneficiaries have"} collected their money.` : "Checked Stellar: nothing new collected yet.";
+      })}>
+      {busy === "verify" ? "Checking…" : label}
+    </Button>
   );
 }

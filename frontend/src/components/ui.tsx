@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { explorerTx, type ReconCategory, type Status } from "@/lib/api";
 import { CLAIM_STYLE, describeFlag, RECON_STYLE, REGISTRY_STYLE, STATUS_STYLE } from "@/lib/format";
 
@@ -263,12 +263,99 @@ export function useReviewer(): [string, (v: string) => void] {
   return [name, update];
 }
 
-/** Inline reviewer field. On wide screens the sidebar has one, so `compact` hides it there. */
+/** Inline reviewer field. The top bar always has one, so `compact` hides this copy. */
 export function ReviewerInput({ value, onChange, compact = false }: { value: string; onChange: (v: string) => void; compact?: boolean }) {
   return (
-    <label className={`flex items-center gap-2 text-[13px] text-zinc-500 ${compact ? "md:hidden" : ""}`}>
+    <label className={`flex items-center gap-2 text-[13px] text-zinc-500 ${compact ? "hidden" : ""}`}>
       Reviewing as
       <input value={value} onChange={(e) => onChange(e.target.value)} placeholder="Your name" className="input w-36" />
     </label>
+  );
+}
+
+/* ---------- select: a styled replacement for the native <select> menu ---------- */
+
+export interface SelectOption { value: string; label: string; dot?: string; hint?: string }
+
+export function Select({ value, onChange, options, label, disabled = false, className = "" }: {
+  value: string;
+  onChange: (v: string) => void;
+  options: SelectOption[];
+  /** accessible name */
+  label: string;
+  disabled?: boolean;
+  className?: string;
+}) {
+  const [open, setOpen] = useState(false);
+  const [active, setActive] = useState(0);
+  const root = useRef<HTMLDivElement>(null);
+  const list = useRef<HTMLUListElement>(null);
+  const current = options.find((o) => o.value === value) ?? options[0];
+
+  useEffect(() => {
+    if (!open) return;
+    const close = (e: MouseEvent) => { if (!root.current?.contains(e.target as Node)) setOpen(false); };
+    document.addEventListener("mousedown", close);
+    return () => document.removeEventListener("mousedown", close);
+  }, [open]);
+
+  useEffect(() => {
+    if (open) list.current?.children[active]?.scrollIntoView({ block: "nearest" });
+  }, [open, active]);
+
+  function openMenu() {
+    setActive(Math.max(0, options.findIndex((o) => o.value === value)));
+    setOpen(true);
+  }
+  function pick(i: number) {
+    onChange(options[i].value);
+    setOpen(false);
+  }
+  function onKey(e: React.KeyboardEvent) {
+    if (!open) {
+      if (["ArrowDown", "ArrowUp", "Enter", " "].includes(e.key)) { e.preventDefault(); openMenu(); }
+      return;
+    }
+    if (e.key === "Escape") { e.preventDefault(); setOpen(false); }
+    else if (e.key === "ArrowDown") { e.preventDefault(); setActive((i) => Math.min(options.length - 1, i + 1)); }
+    else if (e.key === "ArrowUp") { e.preventDefault(); setActive((i) => Math.max(0, i - 1)); }
+    else if (e.key === "Enter" || e.key === " ") { e.preventDefault(); pick(active); }
+    else if (e.key === "Tab") setOpen(false);
+  }
+
+  return (
+    <div ref={root} className={`relative ${className}`}>
+      <button type="button" disabled={disabled} aria-label={label} aria-haspopup="listbox" aria-expanded={open}
+        onClick={() => (open ? setOpen(false) : openMenu())} onKeyDown={onKey}
+        className={`input inline-flex w-full items-center gap-2 pr-2 text-left disabled:cursor-not-allowed disabled:opacity-60 ${open ? "border-zinc-400 ring-2 ring-zinc-900/5" : ""}`}>
+        {current?.dot && <span className="h-1.5 w-1.5 shrink-0 rounded-full" style={{ background: current.dot }} />}
+        <span className="flex-1 truncate">{current?.label}</span>
+        {current?.hint && <span className="text-[12px] tabular-nums text-zinc-400">{current.hint}</span>}
+        <svg viewBox="0 0 16 16" aria-hidden className={`h-3.5 w-3.5 shrink-0 text-zinc-400 transition-transform ${open ? "rotate-180" : ""}`}
+          fill="none" stroke="currentColor" strokeWidth={1.75} strokeLinecap="round" strokeLinejoin="round"><path d="m4 6 4 4 4-4" /></svg>
+      </button>
+      {open && (
+        <ul ref={list} role="listbox" aria-label={label}
+          className="absolute left-0 z-30 mt-1 max-h-72 min-w-full overflow-auto rounded-lg border border-zinc-200 bg-white p-1 shadow-[0_8px_24px_rgba(0,0,0,0.08)]">
+          {options.map((o, i) => {
+            const selected = o.value === value;
+            return (
+              <li key={o.value || "__all"} role="option" aria-selected={selected}
+                onMouseEnter={() => setActive(i)} onMouseDown={(e) => { e.preventDefault(); pick(i); }}
+                className={`flex cursor-pointer items-center gap-2 whitespace-nowrap rounded-md px-2 py-1.5 text-[13px] ${
+                  i === active ? "bg-zinc-100 text-zinc-900" : "text-zinc-700"}`}>
+                <span className="w-3.5 shrink-0">
+                  {selected && <svg viewBox="0 0 16 16" aria-hidden className="h-3.5 w-3.5 text-zinc-900" fill="none" stroke="currentColor"
+                    strokeWidth={2} strokeLinecap="round" strokeLinejoin="round"><path d="m3.5 8.5 3 3 6-7" /></svg>}
+                </span>
+                {o.dot && <span className="h-1.5 w-1.5 shrink-0 rounded-full" style={{ background: o.dot }} />}
+                <span className={`flex-1 ${selected ? "font-medium" : ""}`}>{o.label}</span>
+                {o.hint && <span className="pl-4 text-[12px] tabular-nums text-zinc-400">{o.hint}</span>}
+              </li>
+            );
+          })}
+        </ul>
+      )}
+    </div>
   );
 }
