@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { Fragment, useCallback, useEffect, useState } from "react";
 import { get, payAll, post, type AidRequest, type ClaimResult, type Delivery, type VerifyResult } from "@/lib/api";
+import { useBatch } from "@/lib/batch";
 import { formatAmount, formatHours, formatTime, STATUS_STYLE } from "@/lib/format";
 import { Button, Card, ClaimBadge, Empty, ErrorNote, Notice, PageHeader, RegistryBadge, Select, Stats, TxLink } from "@/components/ui";
 
@@ -24,9 +25,7 @@ function PaymentStatus({ request }: { request: AidRequest }) {
 }
 
 export default function Payouts() {
-  const [rows, setRows] = useState<AidRequest[] | null>(null);
-  const [approvedRows, setApprovedRows] = useState<AidRequest[]>([]);
-  const [batch, setBatch] = useState("");
+  const [all, setAll] = useState<AidRequest[] | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
   const [message, setMessage] = useState<string | null>(null);
@@ -35,10 +34,7 @@ export default function Payouts() {
 
   const load = useCallback(async () => {
     try {
-      const all = await get<AidRequest[]>("/requests");
-      setRows(all.filter((r) => PAID_STATES.has(r.status))
-        .sort((a, b) => Date.parse(b.submitted_at ?? b.updated_at) - Date.parse(a.submitted_at ?? a.updated_at)));
-      setApprovedRows(all.filter((r) => r.status === "APPROVED"));
+      setAll(await get<AidRequest[]>("/requests"));
       get<Delivery>("/delivery").then(setDelivery, () => setDelivery(null));
       setError(null);
     } catch (e) {
@@ -73,21 +69,23 @@ export default function Payouts() {
     }
   }
 
+  const { batch, setBatch, inBatch, batches, options } = useBatch(all);
+  const rows = all === null ? null : all.filter((r) => PAID_STATES.has(r.status) && inBatch(r))
+    .sort((a, b) => Date.parse(b.submitted_at ?? b.updated_at) - Date.parse(a.submitted_at ?? a.updated_at));
+  const approvedAll = all?.filter((r) => r.status === "APPROVED") ?? [];
+  const approved = approvedAll.filter(inBatch).length;
   const count = (s: string) => rows?.filter((r) => r.status === s).length ?? 0;
-  const batches = [...new Set(approvedRows.map((r) => r.batch_id ?? ""))].sort().reverse();  // newest batch first
-  const approved = approvedRows.filter((r) => !batch || r.batch_id === batch).length;
   const waiting = new Map(delivery?.unclaimed.map((u) => [u.request_ref, u]) ?? []);
-  const overdue = delivery?.unclaimed.filter((u) => u.overdue) ?? [];
+  const overdue = delivery?.unclaimed.filter((u) => u.overdue && (!batch || u.batch_id === batch)) ?? [];
 
   return (
     <>
       <PageHeader title="Payouts"
         subtitle="Send approved payouts and verify their status. When enabled, the on-chain registry blocks repeat payments in the same payout slot."
         action={<>
-          {batches.length > 1 && (
-            <Select label="Batch to pay" className="w-56" value={batch} onChange={setBatch} disabled={!!busy}
-              options={[{ value: "", label: "All batches", hint: String(approvedRows.length) },
-                ...batches.map((b) => ({ value: b, label: b, hint: String(approvedRows.filter((r) => (r.batch_id ?? "") === b).length) }))]} />
+          {batches.length > 0 && (
+            <Select label="Batch" className="w-64" value={batch} onChange={setBatch} disabled={!!busy}
+              options={options((b) => (all ?? []).filter((r) => !b || r.batch_id === b).length)} />
           )}
           <Button variant="secondary" disabled={!!busy} onClick={() => run("verify")}>
             {busy === "verify" ? "Checking…" : "Verify & check claims"}
@@ -117,7 +115,7 @@ export default function Payouts() {
         {rows === null && !error ? (
           <Empty>Loading…</Empty>
         ) : !rows?.length ? (
-          <Empty>No payouts yet. Approve requests in <Link href="/review" className="link">Review</Link>, then pay them here.</Empty>
+          <Empty>No payouts {batch ? "in this batch " : ""}yet. Approve requests in <Link href="/review" className="link">Review</Link>, then pay them here.</Empty>
         ) : (
           <div className="overflow-x-auto">
             <table className="data-table min-w-[1000px]">

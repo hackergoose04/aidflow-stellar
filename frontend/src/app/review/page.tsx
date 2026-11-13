@@ -3,12 +3,16 @@
 import Link from "next/link";
 import { useCallback, useEffect, useState } from "react";
 import { get, post, type AidRequest } from "@/lib/api";
+import { useBatch } from "@/lib/batch";
 import { formatAmount, formatTime, shortKey } from "@/lib/format";
 import {
-  Button, Card, Empty, ErrorNote, FlagChips, Notice, PageHeader, ReviewerInput, RiskBar, StatusBadge, useReviewer,
+  Button, Card, Empty, ErrorNote, FlagChips, Notice, PageHeader, ReviewerInput, RiskBar, Select, StatusBadge, useReviewer,
 } from "@/components/ui";
 
+const OPEN = new Set(["PENDING_REVIEW", "HELD", "INVALID"]);
+
 export default function ReviewQueue() {
+  const [all, setAll] = useState<AidRequest[] | null>(null);  // every request: the batch list comes from these
   const [items, setItems] = useState<AidRequest[] | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [reviewer, setReviewer] = useReviewer();
@@ -17,12 +21,9 @@ export default function ReviewQueue() {
 
   const load = useCallback(async () => {
     try {
-      const [pending, held] = await Promise.all([
-        get<AidRequest[]>("/requests?status=PENDING_REVIEW"),
-        get<AidRequest[]>("/requests?status=HELD"),
-      ]);
-      const invalidRows = await get<AidRequest[]>("/requests?status=INVALID");
-      const rows = [...pending, ...held, ...invalidRows];
+      const everything = await get<AidRequest[]>("/requests");
+      setAll(everything);
+      const rows = everything.filter((r) => OPEN.has(r.status));
       rows.sort((a, b) => (b.flags.length > 0 ? 1 : 0) - (a.flags.length > 0 ? 1 : 0)
         || (b.risk_score ?? 0) - (a.risk_score ?? 0));
       setItems(rows);
@@ -52,7 +53,7 @@ export default function ReviewQueue() {
   async function approveClean() {
     setBusy("clean");
     try {
-      await post("/review/approve-clean", { reviewer });
+      await post(`/review/approve-clean${batch ? `?batch=${encodeURIComponent(batch)}` : ""}`, { reviewer });
       await load();
     } catch (e) {
       setError((e as Error).message);
@@ -61,9 +62,11 @@ export default function ReviewQueue() {
     }
   }
 
-  const held = items?.filter((x) => x.status === "HELD") ?? [];
-  const invalid = items?.filter((x) => x.status === "INVALID") ?? [];
-  const pending = items?.filter((x) => x.status === "PENDING_REVIEW") ?? [];
+  const { batch, setBatch, inBatch, batches, options } = useBatch(all);
+  const shown = items?.filter(inBatch) ?? null;
+  const held = shown?.filter((x) => x.status === "HELD") ?? [];
+  const invalid = shown?.filter((x) => x.status === "INVALID") ?? [];
+  const pending = shown?.filter((x) => x.status === "PENDING_REVIEW") ?? [];
   const flagged = pending.filter((x) => x.flags.length);
   const clean = pending.filter((x) => !x.flags.length);
   const noReviewer = !reviewer.trim();
@@ -72,13 +75,19 @@ export default function ReviewQueue() {
     <>
       <PageHeader title="Review queue"
         subtitle="No money moves until a person approves. Flagged requests are sorted by AI risk, highest first."
-        action={<ReviewerInput value={reviewer} onChange={setReviewer} compact />} />
+        action={<>
+          {batches.length > 0 && (
+            <Select label="Batch" className="w-64" value={batch} onChange={setBatch}
+              options={options((b) => (items ?? []).filter((r) => !b || r.batch_id === b).length)} />
+          )}
+          <ReviewerInput value={reviewer} onChange={setReviewer} compact />
+        </>} />
       <ErrorNote error={error} />
       {noReviewer && <Notice tone="warning">Enter your name under <b className="font-medium">Reviewing as</b> to approve, hold or reject.</Notice>}
 
       {items === null && !error && <p className="text-[13px] text-zinc-500">Loading…</p>}
-      {items?.length === 0 && (
-        <Card flush><Empty>Nothing waiting for review. Upload requests on the <Link className="link" href="/">overview</Link>.</Empty></Card>
+      {shown?.length === 0 && (
+        <Card flush><Empty>Nothing waiting for review{batch ? " in this batch" : ""}. Upload requests on the <Link className="link" href="/">overview</Link>.</Empty></Card>
       )}
 
       {clean.length > 0 && (

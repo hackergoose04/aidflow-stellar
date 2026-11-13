@@ -90,11 +90,14 @@ def correct(conn: db.Connection, ref: str, changes: dict, reviewer: str,
     return db.get(conn, ref)
 
 
-def approve_clean(conn: db.Connection, reviewer: str) -> list[str]:
-    """Bulk-approve every pending request that has no flags. Flagged ones stay for a human."""
-    refs = [r["request_ref"] for r in conn.execute(
-        "SELECT request_ref FROM requests WHERE status = ? AND flags = '[]' AND payout_slot = ?",
-        (Status.PENDING_REVIEW, config.DEFAULT_PAYOUT_SLOT))]
+def approve_clean(conn: db.Connection, reviewer: str, batch: str | None = None) -> list[str]:
+    """Bulk-approve every pending request that has no flags (in one batch, if given).
+    Flagged ones stay for a human."""
+    sql = "SELECT request_ref FROM requests WHERE status = ? AND flags = '[]' AND payout_slot = ?"
+    args: tuple = (Status.PENDING_REVIEW, config.DEFAULT_PAYOUT_SLOT)
+    if batch:
+        sql, args = sql + " AND batch_id = ?", args + (batch,)
+    refs = [r["request_ref"] for r in conn.execute(sql, args)]
     approved = []
     for ref in refs:
         updated = conn.execute("UPDATE requests SET status = ?, reviewer = ?, updated_at = ?"

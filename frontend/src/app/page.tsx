@@ -2,6 +2,7 @@
 
 import Link from "next/link";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { followLatestBatch, useBatch } from "@/lib/batch";
 import {
   get, payAll, post, uploadCsv,
   type AidRequest, type ClaimResult, type Delivery, type DeliveryCost, type Summary, type UploadReport, type VerifyResult, type Wallet,
@@ -121,9 +122,12 @@ export default function Home() {
 
   const all = useMemo(() => rows ?? [], [rows]);
   const s = summary?.by_status;
-  const flagged = (summary?.pending_flagged ?? 0) + (s?.HELD ?? 0) + (s?.INVALID ?? 0);
-  const clean = s ? s.PENDING_REVIEW - (summary?.pending_flagged ?? 0) : 0;
-  const approvedRows = all.filter((r) => r.status === "APPROVED");
+  // Review and payout actions work on one batch (the newest unless changed), like Review and Payouts.
+  const { batch, inBatch } = useBatch(rows);
+  const open = all.filter(inBatch);
+  const flagged = open.filter((r) => (r.status === "PENDING_REVIEW" && r.flags.length) || r.status === "HELD" || r.status === "INVALID").length;
+  const clean = open.filter((r) => r.status === "PENDING_REVIEW" && !r.flags.length).length;
+  const approvedRows = open.filter((r) => r.status === "APPROVED");
   const approvedAmount = approvedRows.reduce((n, r) => n + Number(r.amount), 0);
   const inFlight = (s?.SUBMITTED ?? 0) + (s?.UNKNOWN ?? 0);
   const unclaimed = delivery?.unclaimed ?? [];
@@ -151,7 +155,7 @@ export default function Home() {
     title: <><b>{clean}</b> {clean === 1 ? "request" : "requests"} passed every check</>,
     detail: reviewer.trim() ? `Approve them in one step as ${reviewer.trim()}.` : "Enter your name at the top right to approve them.",
     action: <Button size="sm" variant="secondary" disabled={!!busy || !reviewer.trim()}
-      onClick={() => run("approve", () => post<{ approved: number }>("/review/approve-clean", { reviewer }),
+      onClick={() => run("approve", () => post<{ approved: number }>(`/review/approve-clean${batch ? `?batch=${encodeURIComponent(batch)}` : ""}`, { reviewer }),
         (r) => `Approved ${r.approved} requests.`)}>Approve all</Button>,
   });
   if (inFlight) tasks.push({
@@ -177,7 +181,7 @@ export default function Home() {
     run("pay", () => {
       const total = approvedRows.length;
       setProgress(`0 of ${total}`);
-      return payAll(async (done) => { setProgress(`${Math.min(done, total)} of ${total}`); await refresh(); });
+      return payAll(async (done) => { setProgress(`${Math.min(done, total)} of ${total}`); await refresh(); }, batch);
     }, (r) => {
       const ok = r.filter((x) => x.status === "CONFIRMED").length;
       const blocked = r.filter((x) => x.status === "FAILED").length;
@@ -196,6 +200,7 @@ export default function Home() {
           // Nothing accepted is not a success: the warning below explains why, so no green message.
           if (f) run("upload", () => uploadCsv(f), (r) => {
             setUpload(r);
+            if (r.accepted) followLatestBatch();
             return r.accepted ? `Uploaded ${f.name}: ${r.accepted} ${r.accepted === 1 ? "request" : "requests"} added.` : null;
           });
           e.target.value = "";
@@ -238,6 +243,12 @@ export default function Home() {
               {busy === "pay" ? `Sending ${progress}…` : `Send approved${approvedRows.length ? ` · ${approvedRows.length}` : ""}`}
             </Button>
           </div>
+          {batch && (
+            <div className="mt-3 text-[12px] text-zinc-400">
+              Working on batch <span className="font-mono text-zinc-600">{batch}</span> ·{" "}
+              <Link href="/payouts" className="link">change</Link>
+            </div>
+          )}
         </div>
 
         <div className="min-w-0 flex-[2_1_520px] rounded-2xl border border-zinc-200 bg-white px-7 pt-6 pb-5">
