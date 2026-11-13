@@ -82,7 +82,7 @@ Matches the design doc's payment state machine (its VALIDATED / FLAGGED / CLEARE
 | GET | `/public/summary` · `/public/batches/{id}` · `/public/payments/{ref}` | Donor view: amounts, outcomes, transactions. No personal data |
 | GET | `/public/claimable?wallet=G…` | Payouts waiting for that wallet to claim (reference, batch, amount, balance id). For the claim page |
 | POST | `/review/approve-clean` | Approve every pending request with no flags |
-| POST | `/payouts/run?limit=20` | Pay approved requests |
+| POST | `/payouts/run?limit=20` | Pay approved requests (side by side with channel accounts) |
 | POST | `/payouts/verify` | Look up SUBMITTED / UNKNOWN txs by hash |
 | POST | `/recon/run` | Reconcile every request with the chain (results also stored per request) |
 
@@ -99,6 +99,14 @@ Matches the design doc's payment state machine (its VALIDATED / FLAGGED / CLEARE
 - **No double payout.** The tx hash is committed as `SUBMITTED` before the tx is sent, and only
   rows still `APPROVED` can be claimed by the executor. An unclear submit is looked up by hash,
   never resent. A `FAILED` row can be retried because its tx's 30-second time bounds have passed.
+- **Parallel payouts (channel accounts).** Each payout is three transactions (register, pay,
+  mark paid), each waiting for a ledger: ~15 s. Stellar takes about one transaction per source
+  account per ledger, so with DISTRIBUTION alone payouts go one by one (100 ≈ 25 min). With
+  `CHANNEL_SECRETS` set (`python scripts/channels_setup.py --count 10`), one worker per channel
+  pays side by side: the channel is the transaction source and pays the fee, while every operation
+  stays sourced from DISTRIBUTION, so the money, the memo, recon and the registry's admin auth are
+  unchanged. 10 channels ≈ 100 payouts in 2–3 min. Two requests racing for the same registry slot
+  still pay once: the loser ends `BLOCKED`.
 - **Recon** links chain and DB through the memo (`SHA-256(request_ref)`) and compares transaction,
   amount, wallet, **asset** and status. Each request gets one of the design doc's four results:
   `MATCHED`, `PENDING_VERIFICATION`, `MISMATCH` (with reasons: amount / wallet / asset / tx hash

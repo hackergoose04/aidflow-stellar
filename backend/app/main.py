@@ -106,7 +106,8 @@ def summary(conn: db.Connection = Depends(get_conn)) -> dict:
                           " WHERE registry_status IS NOT NULL GROUP BY registry_status"):
         reg[r["registry_status"]] = r["n"]
     return {"by_status": counts, "pending_flagged": flagged, "recon": recon_counts, "registry": reg,
-            "last_recon": last_recon, "batches": batches, "risk_histogram": hist}
+            "last_recon": last_recon, "batches": batches, "risk_histogram": hist,
+            "payout_lanes": max(1, len(sc.channel_keypairs()))}
 
 
 @app.get("/delivery")

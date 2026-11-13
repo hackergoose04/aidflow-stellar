@@ -64,9 +64,13 @@ def get(key: bytes) -> dict | None:
 
 
 def _call(function: str, *args) -> str:
+    admin = sc.distribution_keypair()
+    # With a channel as the transaction source, the call itself is still made by the admin
+    # (the operation's source), which is what the contract's require_auth checks.
+    op_source = admin.public_key if sc.current_channel() else None
     status, tx_hash, _ = soroban.submit(
-        sc.distribution_keypair(),
-        lambda b: b.append_invoke_contract_function_op(contract_id(), function, list(args)))
+        admin, lambda b: b.append_invoke_contract_function_op(contract_id(), function, list(args),
+                                                               source=op_source))
     if status != "SUCCESS":
         raise soroban.ContractError(None, f"{function} {status}: {sc.explorer_link(tx_hash)}")
     return tx_hash
@@ -86,9 +90,11 @@ def reserve(key: bytes, request_ref: str) -> tuple[str, str | None]:
         try:
             return "RESERVED", _call("register", scval.to_bytes(key), scval.to_bytes(mine))
         except soroban.ContractError as exc:
-            if exc.code != ALREADY_REGISTERED:
+            # Lost a race, caught in simulation (ALREADY_REGISTERED) or on chain (code None: with
+            # parallel payouts two simulations can both pass). Look at who holds the key now.
+            entry = get(key) if exc.code in (ALREADY_REGISTERED, None) else None
+            if entry is None:
                 raise
-            entry = get(key)  # lost a race: look at who holds it
     if entry["request_hash"] != mine:
         return "BLOCKED", entry["status"]
     if entry["status"] == "Paid":

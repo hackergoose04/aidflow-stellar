@@ -40,9 +40,15 @@ def prepare(signer_public: str, build):
 
 
 def submit(signer: Keypair, build, timeout: int = 60) -> tuple[str, str, xdr.SCVal | None]:
-    """Prepare, sign, send, wait. Returns (SUCCESS | FAILED | UNKNOWN, tx_hash, return value)."""
-    tx = prepare(signer.public_key, build)
+    """Prepare, sign, send, wait. Returns (SUCCESS | FAILED | UNKNOWN, tx_hash, return value).
+
+    Inside sc.using_channel(...) the channel is the transaction's source; `build` must then set
+    the operation's source to `signer` (as registry._call does)."""
+    channel = sc.current_channel()
+    tx = prepare((channel or signer).public_key, build)
     tx.sign(signer)
+    if channel:
+        tx.sign(channel)
     return send_and_wait(tx, timeout)
 
 
