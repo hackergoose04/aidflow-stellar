@@ -248,8 +248,9 @@ def retry(ref: str, body: Decision, conn: db.Connection = Depends(get_conn)) -> 
 
 
 @app.post("/review/approve-clean")
-def approve_clean(body: Decision, conn: db.Connection = Depends(get_conn)) -> dict:
-    refs = review.approve_clean(conn, body.reviewer)
+def approve_clean(body: Decision, batch: str | None = None, conn: db.Connection = Depends(get_conn)) -> dict:
+    """Approve every unflagged pending request; `batch` limits it to one disbursement batch."""
+    refs = review.approve_clean(conn, body.reviewer, batch)
     return {"approved": len(refs), "request_refs": refs}
 
 
