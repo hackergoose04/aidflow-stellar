@@ -145,20 +145,37 @@ function Source({ ml }: { ml: boolean }) {
     : <span className="h-1.5 w-1.5 rounded-full bg-amber-500" />;
 }
 
-export function FlagChips({ flags, verbose = false }: { flags: string[]; verbose?: boolean }) {
+const RISK_SIGNAL_LABELS: Record<string, string> = {
+  amount: "amount and relative amount",
+  time_of_day: "time of day",
+  recent_activity: "recent payment frequency and gaps",
+  wallet_history: "wallet and beneficiary history",
+};
+
+export function FlagChips({ flags, verbose = false, riskSignals, payment }: {
+  flags: string[];
+  verbose?: boolean;
+  riskSignals?: string[] | null;
+  payment?: { amount: string; asset: string };
+}) {
   if (!flags.length) return <span className="text-[12px] text-zinc-400">No flags</span>;
   const groups = groupFlags(flags);
   if (verbose) {
     return (
       <ul className="divide-y divide-zinc-100">
         {groups.map((f) => {
-          const info = describeFlag(f);
+          const info = describeFlag(f, payment);
           return (
             <li key={f} className="flex gap-3 py-2.5 first:pt-0 last:pb-0">
               <span className="mt-1 flex h-3.5 w-5 shrink-0 items-center justify-center"><Source ml={info.source === "ml"} /></span>
               <div className="min-w-0">
                 <div className="text-[13px] font-medium text-zinc-900">{info.label}</div>
                 <div className="break-words text-[12px] text-zinc-500">{info.detail}</div>
+                {info.source === "ml" && !!riskSignals?.length && (
+                  <p className="mt-1 text-[12px] text-zinc-600">
+                    The score fell most when tested with typical training values for {riskSignals.map((signal) => RISK_SIGNAL_LABELS[signal] ?? signal).join(" and ")}.
+                  </p>
+                )}
               </div>
             </li>
           );
@@ -169,7 +186,7 @@ export function FlagChips({ flags, verbose = false }: { flags: string[]; verbose
   return (
     <div className="flex flex-wrap gap-1">
       {groups.map((f) => {
-        const info = describeFlag(f);
+        const info = describeFlag(f, payment);
         return (
           <span key={f} title={info.detail}
             className="inline-flex h-[22px] items-center gap-1.5 whitespace-nowrap rounded-md bg-zinc-100 px-1.5 text-[12px] text-zinc-700">
@@ -182,18 +199,16 @@ export function FlagChips({ flags, verbose = false }: { flags: string[]; verbose
   );
 }
 
-export function RiskBar({ score, threshold = 0.9 }: { score: number | null; threshold?: number }) {
+export function RiskBar({ score, mlFlagged }: { score: number | null; mlFlagged: boolean }) {
   if (score === null) return <Dash />;
-  const high = score >= threshold;
   return (
-    <div className="flex items-center gap-2 whitespace-nowrap" title={`Risk ${score.toFixed(3)}`}>
+    <div className="flex items-center gap-2 whitespace-nowrap" title={`Risk ${score.toFixed(6)} · ${mlFlagged ? "ML flagged" : "No ML flag"}`}>
       <div className="h-1 w-14 overflow-hidden rounded-full bg-zinc-100">
-        <div className={`h-full rounded-full ${high ? "bg-rose-500" : score >= 0.7 ? "bg-amber-400" : "bg-zinc-300"}`}
+        <div className={`h-full rounded-full ${mlFlagged ? "bg-red-600" : "bg-zinc-300"}`}
           style={{ width: `${Math.max(4, score * 100)}%` }} />
       </div>
-      {/* Truncate, don't round: 0.886 shows as 0.88 so it never looks above a 0.89 threshold. */}
-      <span className={`w-8 font-mono text-[12px] tabular-nums ${high ? "font-medium text-rose-600" : "text-zinc-500"}`}>
-        {(Math.floor(score * 100) / 100).toFixed(2)}
+      <span className={`font-mono text-[12px] tabular-nums ${mlFlagged ? "font-medium text-red-600" : "text-zinc-500"}`}>
+        {score.toFixed(6)}
       </span>
     </div>
   );

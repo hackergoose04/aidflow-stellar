@@ -8,16 +8,19 @@ import json
 import logging
 import os
 from collections.abc import Iterator
+from collections import Counter
 
-from fastapi import Depends, FastAPI, HTTPException, UploadFile
+from fastapi import Depends, FastAPI, HTTPException, Query, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, StringConstraints
 from typing import Annotated
 
+from ml import score
+
 from . import config, db, identity, public, registry, stellar_client as sc
 from .db import Status
-from .services import claims, delivery, executor, ingest, recon, review, verifier
+from .services import claims, delivery, executor, ingest, recon, review, screening_policy, verifier
 
 app = FastAPI(title="AidFlow", description="Aid payout monitoring and reconciliation on Stellar Testnet")
 
@@ -70,7 +73,38 @@ class Correction(BaseModel):
     amount: str | None = None
     batch_id: str | None = None
     payout_slot: str | None = None
+    installment: str | None = None
+    benefit_month: str | None = None
     created_at: str | None = None
+
+
+class ScreeningPolicyUpdate(BaseModel):
+    reviewer: Reviewer
+    policy: screening_policy.ScreeningPolicy
+    apply_pending: bool = False
+
+
+@app.get("/screening-policy")
+def get_screening_policy(conn: db.Connection = Depends(get_conn)) -> screening_policy.ScreeningPolicy:
+    return screening_policy.current(conn)
+
+
+@app.post("/screening-policy/preview")
+def preview_screening_policy(policy: screening_policy.ScreeningPolicy, conn: db.Connection = Depends(get_conn)) -> dict:
+    counts, _ = screening_policy.pending_changes(conn, policy)
+    return counts
+
+
+@app.post("/screening-policy")
+def update_screening_policy(body: ScreeningPolicyUpdate, conn: db.Connection = Depends(get_conn)) -> dict:
+    if not screening_policy.editing_enabled():
+        raise HTTPException(403, "Screening settings are read-only on this instance.")
+    try:
+        counts = screening_policy.save(conn, body.policy, body.reviewer, body.apply_pending)
+    except ValueError as exc:
+        conn.rollback()
+        raise HTTPException(409, str(exc)) from exc
+    return {"policy": body.policy.model_dump(mode="json"), "pending": counts}
 
 
 @app.get("/health")
@@ -83,8 +117,16 @@ def summary(conn: db.Connection = Depends(get_conn)) -> dict:
     counts = {s.value: 0 for s in Status}
     for r in conn.execute("SELECT status, COUNT(*) AS n FROM requests GROUP BY status"):
         counts[r["status"]] = r["n"]
-    flagged = conn.execute("SELECT COUNT(*) FROM requests WHERE status = ? AND flags != '[]'",
-                           (Status.PENDING_REVIEW,)).fetchone()[0]
+    review_rows = conn.execute("SELECT status, flags FROM requests WHERE status IN (?, ?)"
+                               " OR (status = ? AND flags != '[]')", (Status.HELD, Status.INVALID, Status.PENDING_REVIEW)).fetchall()
+    flagged = 0
+    review_reasons: Counter[str] = Counter()
+    for row in review_rows:
+        flagged += row["status"] == Status.PENDING_REVIEW
+        reasons = {flag.partition(":")[0] for flag in json.loads(row["flags"])}
+        if row["status"] in (Status.INVALID, Status.HELD):
+            reasons.add(row["status"].lower())
+        review_reasons.update(reasons)
     recon_counts = {c: 0 for c in recon.CATEGORIES}
     for r in conn.execute("SELECT recon_status, COUNT(*) AS n FROM requests"
                           " WHERE recon_status IS NOT NULL GROUP BY recon_status"):
@@ -93,20 +135,50 @@ def summary(conn: db.Connection = Depends(get_conn)) -> dict:
     batches = [dict(r) for r in conn.execute(
         "SELECT batch_id, COUNT(*) AS requests,"
         " SUM(CASE WHEN status IN ('CONFIRMED', 'CLAIMED') THEN 1 ELSE 0 END) AS confirmed,"
-        " SUM(CASE WHEN flags != '[]' THEN 1 ELSE 0 END) AS flagged,"
-        " CAST(ROUND(SUM(CAST(amount AS NUMERIC)), 2) AS DOUBLE PRECISION) AS amount"
+        " SUM(CASE WHEN status = 'PENDING_REVIEW' AND flags != '[]' THEN 1 ELSE 0 END) AS flagged,"
+        " CAST(ROUND(SUM(CAST(CASE WHEN status = 'INVALID' THEN '0' ELSE amount END AS NUMERIC)), 2) AS DOUBLE PRECISION) AS amount"
         " FROM requests GROUP BY batch_id ORDER BY batch_id")]
-    risk = [r[0] for r in conn.execute("SELECT risk_score FROM requests WHERE risk_score IS NOT NULL")]
     hist = [0] * 10
-    for x in risk:
-        hist[min(9, int(x * 10))] += 1
+    hist_flagged = [0] * 10
+    for row in conn.execute("SELECT risk_score, flags FROM requests WHERE risk_score IS NOT NULL"):
+        bucket = min(9, int(row["risk_score"] * 10))
+        hist[bucket] += 1
+        if any(flag.startswith("ml_high_risk:") for flag in json.loads(row["flags"])):
+            hist_flagged[bucket] += 1
     reg = {"enabled": registry.enabled(), "contract": registry.contract_id(),
            "explorer": registry.explorer_contract(), "program": registry.program()}
     for r in conn.execute("SELECT registry_status, COUNT(*) AS n FROM requests"
                           " WHERE registry_status IS NOT NULL GROUP BY registry_status"):
         reg[r["registry_status"]] = r["n"]
-    return {"by_status": counts, "pending_flagged": flagged, "recon": recon_counts, "registry": reg,
-            "last_recon": last_recon, "batches": batches, "risk_histogram": hist}
+    return {"by_status": counts, "pending_flagged": flagged, "review_reasons": dict(review_reasons), "recon": recon_counts, "registry": reg,
+            "last_recon": last_recon, "batches": batches, "risk_histogram": hist,
+            "risk_histogram_flagged": hist_flagged,
+            "asset_code": config.ASSET_CODE,
+            "screening_policy_editable": screening_policy.editing_enabled(),
+            "risk_threshold": score.active_threshold(registry.program(), config.ASSET_CODE)}
+
+
+@app.get("/ml/cutoff-preview")
+def preview_ml_cutoff(cutoff: Annotated[float, Query(ge=0, le=1)], conn: db.Connection = Depends(get_conn)) -> dict:
+    active = score.active_threshold(registry.program(), config.ASSET_CODE)
+    if active is None:
+        raise HTTPException(409, "No compatible ML model is active.")
+
+    current = {"ml_flags": 0, "review": 0}
+    preview = current.copy()
+    for row in conn.execute("SELECT risk_score, flags FROM requests WHERE status = ? AND asset = ?",
+                            (Status.PENDING_REVIEW, config.ASSET_CODE)):
+        flags = json.loads(row["flags"])
+        ml_flag = any(flag.startswith("ml_high_risk:") for flag in flags)
+        rule_flag = any(not flag.startswith("ml_high_risk:") for flag in flags)
+        risk = row["risk_score"]
+        # Use the recorded decision at the active cutoff because older scores were rounded.
+        preview_ml = ml_flag if risk is None or cutoff == active else risk >= cutoff
+        current["ml_flags"] += ml_flag
+        current["review"] += bool(flags)
+        preview["ml_flags"] += preview_ml
+        preview["review"] += preview_ml or rule_flag
+    return {"current": current, "preview": preview}
 
 
 @app.get("/delivery")

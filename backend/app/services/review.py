@@ -8,7 +8,7 @@ from . import dedup, ingest, screening
 
 OPEN = (Status.PENDING_REVIEW, Status.HELD)  # states a reviewer can approve / reject
 CORRECTABLE = (*OPEN, Status.INVALID)          # an invalid record can be fixed, or rejected
-EDITABLE = ("beneficiary_id", "wallet", "amount", "batch_id", "payout_slot", "created_at")
+EDITABLE = ("beneficiary_id", "wallet", "amount", "batch_id", "payout_slot", "created_at", "installment", "benefit_month")
 
 
 def decide(conn: db.Connection, ref: str, approve: bool, reviewer: str,
@@ -60,6 +60,16 @@ def correct(conn: db.Connection, ref: str, changes: dict, reviewer: str,
         changes["beneficiary_id"] = identity.pseudonymize(changes["beneficiary_id"])
     if "payout_slot" in changes:
         changes["payout_slot"] = changes["payout_slot"].lower() or config.DEFAULT_PAYOUT_SLOT
+    if "installment" in changes:
+        number = config.parse_installment(changes["installment"])
+        if changes["installment"] and number is None:
+            raise ValueError("invalid correction: installment must be a positive integer or blank")
+        changes["installment"] = number
+    if "benefit_month" in changes:
+        month = config.parse_benefit_month(changes["benefit_month"])
+        if changes["benefit_month"] and month is None:
+            raise ValueError("invalid correction: benefit month must be YYYY-MM or blank")
+        changes["benefit_month"] = month
     errors = ingest.validate({**row, **changes})
     if errors:
         raise ValueError(f"invalid correction: {', '.join(errors)}")
@@ -68,14 +78,16 @@ def correct(conn: db.Connection, ref: str, changes: dict, reviewer: str,
         changes["amount"] = ingest.normalize_amount(changes["amount"])
     if "created_at" in changes:
         changes["created_at"] = ingest.parse_time(changes["created_at"])
-    changes = {k: v for k, v in changes.items() if v != (row[k] or "")}
+    changes = {k: v for k, v in changes.items()
+               if v != (row[k] if k in ("installment", "benefit_month") else row[k] or "")}
     if not changes:
         raise ValueError("nothing to change")
     sets = ", ".join(f"{k} = ?" for k in changes)
-    updated = conn.execute(f"UPDATE requests SET {sets}, status = ?, flags = '[]', risk_score = NULL,"
-                           " reviewer = ?, note = ?, updated_at = ?"
+    corrected_at = db.now()
+    updated = conn.execute(f"UPDATE requests SET {sets}, status = ?, flags = '[]', risk_score = NULL, risk_signals = NULL,"
+                           " reviewer = ?, note = ?, updated_at = ?, available_at = ?"
                            " WHERE request_ref = ? AND status = ? AND updated_at = ?",
-                           (*changes.values(), Status.PENDING_REVIEW, reviewer, note, db.now(),
+                           (*changes.values(), Status.PENDING_REVIEW, reviewer, note, corrected_at, corrected_at,
                             ref, row["status"], row["updated_at"]))
     if updated.rowcount != 1:
         raise ValueError(f"{ref} changed during review; reload it before correcting")

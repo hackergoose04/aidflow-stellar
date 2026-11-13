@@ -1,0 +1,27 @@
+{
+  "installment_schedule": {
+    "review_budget": 0.01,
+    "slices": [
+      { "reviewed": 16964, "returns": 33, "baseline_found": 14, "schedule_found": 28 },
+      { "reviewed": 21694, "returns": 22, "baseline_found": 11, "schedule_found": 19 }
+    ]
+  },
+  "benefit_month": [
+    { "name": "Auxílio Brasil", "period": 202302, "checked": 20984227, "earlier": 0 },
+    { "name": "Novo Bolsa Família", "period": 202606, "checked": 19224784, "earlier": 59409 }
+  ],
+  "stellar_usdc": {
+    "replay_rows": 4492,
+    "training_rows": 2470,
+    "validation_rows": 679,
+    "test_rows": 1343,
+    "validation_review_budget": 0.1,
+    "cutoff": 0.9013254786450663,
+    "replay_ml_flags": 232,
+    "replay_possible_duplicates": 181,
+    "replay_any_flag": 329,
+    "test_ml_flags": 125,
+    "test_any_flag": 157,
+    "verified_anomaly_labels": false
+  }
+}

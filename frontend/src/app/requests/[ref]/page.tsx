@@ -12,7 +12,8 @@ import {
 
 const FIELDS = [
   ["beneficiary_id", "Beneficiary ID"], ["wallet", "Wallet"], ["amount", "Amount"], ["batch_id", "Batch"],
-  ["payout_slot", "Payout slot"],
+  ["payout_slot", "Payout slot"], ["installment", "Reported installment (optional)"],
+  ["benefit_month", "Benefit month (YYYY-MM, optional)"],
   ["created_at", "Requested at (ISO)"],
 ] as const;
 type Field = (typeof FIELDS)[number][0];
@@ -39,7 +40,8 @@ export default function RequestDetail() {
         setReq(r);
         // Beneficiary starts empty: only a token is stored; staff type the real ID to change it.
         setEdit({ beneficiary_id: "", wallet: r.wallet, amount: r.amount ? String(Number(r.amount) || r.amount) : "",
-          batch_id: r.batch_id ?? "", payout_slot: r.payout_slot, created_at: r.created_at });
+          batch_id: r.batch_id ?? "", payout_slot: r.payout_slot,
+          installment: String(r.installment ?? ""), benefit_month: r.benefit_month ?? "", created_at: r.created_at });
         setError(null);
       }, (e) => setError((e as Error).message));
   }, [id]);
@@ -52,7 +54,12 @@ export default function RequestDetail() {
     setBusy(true);
     try {
       const changes = action === "correct" && edit
-        ? Object.fromEntries(Object.entries(edit).filter(([, v]) => v.trim() !== ""))
+        ? Object.fromEntries(Object.entries(edit).filter(([key, value]) => {
+          if (key === "installment" || key === "benefit_month") {
+            return value.trim() !== String(req?.[key] ?? "");
+          }
+          return value.trim() !== "";
+        }))
         : {};
       await post(`/requests/${encodeURIComponent(id)}/${action}`, { reviewer, note: note || null, ...changes });
       setNote("");
@@ -96,6 +103,8 @@ export default function RequestDetail() {
                 <span className="ml-2 text-[12px] text-zinc-400">pseudonymous token</span>
               </Row>
               <Row label="Payout slot">{req.payout_slot}</Row>
+              <Row label="Reported installment">{req.installment ?? "—"}</Row>
+              <Row label="Benefit month">{req.benefit_month ?? "—"}</Row>
               <Row label="Wallet">
                 {walletState === "missing" || walletState === "invalid" ? (
                   <>
@@ -111,7 +120,7 @@ export default function RequestDetail() {
                 )}
               </Row>
               <Row label="Requested">{formatTime(req.created_at)}</Row>
-              <Row label="AI risk"><RiskBar score={req.risk_score} /></Row>
+              <Row label="AI risk"><RiskBar score={req.risk_score} mlFlagged={req.flags.some((flag) => flag.startsWith("ml_high_risk:"))} /></Row>
               {req.reviewer && <Row label="Reviewed by">{req.reviewer}{req.note && <span className="text-zinc-500"> · “{req.note}”</span>}</Row>}
             </dl>
           </Card>
@@ -155,6 +164,7 @@ export default function RequestDetail() {
                     {label}
                     <input value={edit[k]} onChange={(e) => setEdit({ ...edit, [k]: e.target.value })}
                       placeholder={k === "beneficiary_id" ? "Type the real ID to change" : undefined}
+                      inputMode={k === "installment" ? "numeric" : undefined}
                       className={`input h-9 ${k === "wallet" ? "font-mono" : ""}`} />
                   </label>
                 ))}
@@ -206,7 +216,7 @@ export default function RequestDetail() {
             </Card>
           )}
 
-          <Card title="Flags"><FlagChips flags={req.flags} verbose /></Card>
+          <Card title="Flags"><FlagChips flags={req.flags} riskSignals={req.risk_signals} payment={req} verbose /></Card>
 
           <Card title="Activity">
             {req.events?.length ? (

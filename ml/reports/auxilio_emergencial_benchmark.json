@@ -1,0 +1,327 @@
+{
+  "evaluation": "retrospective ranking of published administrative statuses",
+  "limitations": [
+    "Published installment month does not establish when a row or status became visible.",
+    "Returned and held are administrative observations. Unknown is not a verified negative.",
+    "Amounts and repeated installment groups are as represented in the public export."
+  ],
+  "preparation": {
+    "source_url": "https://portaldatransparencia.gov.br/download-de-dados/auxilio-emergencial",
+    "sources": [
+      {
+        "file": "202107_AuxilioEmergencial.zip.part",
+        "counts": {
+          "source_rows": 8638070,
+          "missing_beneficiary_key": 5297552,
+          "sampled_eligible_rows": 3340515,
+          "invalid_installment": 3
+        },
+        "source_rows_by_month": {
+          "202107": 8638070
+        },
+        "source_rows_by_status": {
+          "unknown": 8637658,
+          "returned": 412
+        },
+        "missing_beneficiary_key_by_status": {
+          "unknown": 5297146,
+          "returned": 406
+        },
+        "nonpositive_amount_by_status": {}
+      },
+      {
+        "file": "202108_AuxilioEmergencial.zip.part",
+        "counts": {
+          "source_rows": 8590514,
+          "missing_beneficiary_key": 5211404,
+          "sampled_eligible_rows": 3379109,
+          "invalid_installment": 1
+        },
+        "source_rows_by_month": {
+          "202108": 8590514
+        },
+        "source_rows_by_status": {
+          "unknown": 8590399,
+          "returned": 115
+        },
+        "missing_beneficiary_key_by_status": {
+          "unknown": 5211303,
+          "returned": 101
+        },
+        "nonpositive_amount_by_status": {}
+      },
+      {
+        "file": "202109_AuxilioEmergencial.zip.part",
+        "counts": {
+          "source_rows": 8559966,
+          "missing_beneficiary_key": 5160209,
+          "sampled_eligible_rows": 3399757
+        },
+        "source_rows_by_month": {
+          "202109": 8559966
+        },
+        "source_rows_by_status": {
+          "unknown": 8559742,
+          "returned": 224
+        },
+        "missing_beneficiary_key_by_status": {
+          "unknown": 5159992,
+          "returned": 217
+        },
+        "nonpositive_amount_by_status": {}
+      },
+      {
+        "file": "202110_AuxilioEmergencial.zip.part",
+        "counts": {
+          "source_rows": 9748744,
+          "missing_beneficiary_key": 8052315,
+          "sampled_eligible_rows": 1696427,
+          "invalid_installment": 2
+        },
+        "source_rows_by_month": {
+          "202110": 9748744
+        },
+        "source_rows_by_status": {
+          "unknown": 9740076,
+          "returned": 8668
+        },
+        "missing_beneficiary_key_by_status": {
+          "unknown": 8043680,
+          "returned": 8635
+        },
+        "nonpositive_amount_by_status": {}
+      }
+    ],
+    "sample_rate": 1.0,
+    "sample_unit": "Stable beneficiary key (NIS, with full CPF fallback)",
+    "duplicate_policy": "Identical scoring fields collapse to one row. Conflicting statuses become unknown. Distinct same-month installments are retained and counted as possible repetitions.",
+    "rows": 11815808,
+    "statuses": {
+      "unknown": 11815748,
+      "returned": 60
+    },
+    "months": {
+      "202107": {
+        "unknown": 3340509,
+        "rows": 3340515,
+        "returned": 6,
+        "possible_repeated_installment_rows": 44
+      },
+      "202108": {
+        "unknown": 3379095,
+        "rows": 3379109,
+        "possible_repeated_installment_rows": 38,
+        "returned": 14
+      },
+      "202109": {
+        "unknown": 3399750,
+        "rows": 3399757,
+        "possible_repeated_installment_rows": 40,
+        "returned": 7
+      },
+      "202110": {
+        "unknown": 1696394,
+        "rows": 1696427,
+        "returned": 33,
+        "possible_repeated_installment_rows": 2
+      }
+    },
+    "source_coverage": {
+      "method": "Only complete lines in the first 128 MiB of each official monthly ZIP",
+      "representative": false,
+      "note": "Archive order can select different cohorts from the national population. Full ZIP CRC cannot be established from these prefixes."
+    }
+  },
+  "split": {
+    "burn_in_month": 202107,
+    "train": {
+      "months": [
+        202108
+      ],
+      "rows": 3379109
+    },
+    "validation": {
+      "months": [
+        202109
+      ],
+      "rows": 3399757
+    },
+    "test": {
+      "months": [
+        202110
+      ],
+      "rows": 1696427
+    }
+  },
+  "model": {
+    "algorithm": "Isolation Forest",
+    "parameters": {
+      "n_estimators": 300,
+      "max_samples": 256,
+      "contamination": "auto",
+      "random_state": 0
+    },
+    "amount_features": [
+      "log_amount",
+      "log_amount_ratio_cohort"
+    ],
+    "history_features": [
+      "log_amount",
+      "log_amount_ratio_cohort",
+      "log_amount_ratio_beneficiary"
+    ],
+    "training_reference": "All training rows for the amount model, rows with prior history for the history model."
+  },
+  "rules": "Prioritize repeated beneficiary/installment groups, then amount deviation, within each review group.",
+  "review_budget": 0.1,
+  "review_allocation": "Per month, split the review budget proportionally by availability of beneficiary history.",
+  "calibration": {
+    "ml_weight_in_combined_ranking": 0.0,
+    "validation_hits_by_weight": {
+      "0.0": 4,
+      "0.25": 4,
+      "0.5": 0,
+      "0.75": 0,
+      "1.0": 0
+    },
+    "weight_calibrated_with_published_statuses": true,
+    "tie_break": "deterministic hash of prepared record_id; keep the preparation key to reproduce ties"
+  },
+  "test": {
+    "rows": 1696427,
+    "statuses": {
+      "returned": 33,
+      "held": 0,
+      "unknown": 1696394
+    },
+    "history": {
+      "with_history": 911563,
+      "without_history": 784864
+    },
+    "rankings": {
+      "rules_only": {
+        "reviewed": 169642,
+        "statuses": {
+          "returned": 14,
+          "held": 0,
+          "unknown": 169628
+        },
+        "history": {
+          "with_history": 91156,
+          "without_history": 78486
+        },
+        "published_status_coverage": {
+          "returned": 0.424242,
+          "held": null
+        }
+      },
+      "ml_only": {
+        "reviewed": 169642,
+        "statuses": {
+          "returned": 10,
+          "held": 0,
+          "unknown": 169632
+        },
+        "history": {
+          "with_history": 91156,
+          "without_history": 78486
+        },
+        "published_status_coverage": {
+          "returned": 0.30303,
+          "held": null
+        }
+      },
+      "rules_plus_ml": {
+        "reviewed": 169642,
+        "statuses": {
+          "returned": 14,
+          "held": 0,
+          "unknown": 169628
+        },
+        "history": {
+          "with_history": 91156,
+          "without_history": 78486
+        },
+        "published_status_coverage": {
+          "returned": 0.424242,
+          "held": null
+        }
+      }
+    },
+    "added_by_combined": {
+      "returned": 0,
+      "held": 0,
+      "unknown": 0
+    },
+    "displaced_by_combined": {
+      "returned": 0,
+      "held": 0,
+      "unknown": 0
+    },
+    "by_month": [
+      {
+        "month": 202110,
+        "rows": 1696427,
+        "review_budget_rows": 169642,
+        "same_month_repeat_rows": 2,
+        "statuses": {
+          "returned": 33,
+          "held": 0,
+          "unknown": 1696394
+        },
+        "history": {
+          "with_history": 911563,
+          "without_history": 784864
+        },
+        "rankings": {
+          "rules_only": {
+            "reviewed": 169642,
+            "statuses": {
+              "returned": 14,
+              "held": 0,
+              "unknown": 169628
+            },
+            "history": {
+              "with_history": 91156,
+              "without_history": 78486
+            }
+          },
+          "ml_only": {
+            "reviewed": 169642,
+            "statuses": {
+              "returned": 10,
+              "held": 0,
+              "unknown": 169632
+            },
+            "history": {
+              "with_history": 91156,
+              "without_history": 78486
+            }
+          },
+          "rules_plus_ml": {
+            "reviewed": 169642,
+            "statuses": {
+              "returned": 14,
+              "held": 0,
+              "unknown": 169628
+            },
+            "history": {
+              "with_history": 91156,
+              "without_history": 78486
+            }
+          }
+        },
+        "added_by_combined": {
+          "returned": 0,
+          "held": 0,
+          "unknown": 0
+        },
+        "displaced_by_combined": {
+          "returned": 0,
+          "held": 0,
+          "unknown": 0
+        }
+      }
+    ]
+  }
+}

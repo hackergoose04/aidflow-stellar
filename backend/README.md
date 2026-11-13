@@ -105,15 +105,27 @@ Matches the design doc's payment state machine (its VALIDATED / FLAGGED / CLEARE
   differs, missing on chain, paid N times, paid although rejected or failed) or `NOT_EXECUTED`.
   Payouts on chain with no matching request are listed as `unrecorded_on_chain`.
   Accuracy on a synthetic ledger with injected discrepancies: `python scripts/recon_eval.py`.
-- **ML risk score**: `services/screening.py::ml_score` scores new requests with the model in
-  `ml/` (history = all stored requests), stores `risk_score` and adds `ml_high_risk` above the
-  tuned threshold. If no model file exists, screening falls back to rules only. See `ml/README.md`.
+- **ML risk score**: `services/screening.py::ml_score` stores `risk_score` and adds `ml_high_risk`
+  at the model's threshold. `AIDFLOW_MODEL_PATH` selects an alternate bundle. A fixed-history
+  bundle is scoped to one `PROGRAM_ID` and `ASSET_CODE` and uses behavior features with a
+  validation score reference. Without a compatible bundle, screening uses rules only.
+  When the bundle has feature reference statistics, Review shows the model sensitivity signals.
+  See `ml/README.md` for training.
 - **Rules**: amount above limit, shared wallet, wallet changed, possible duplicate, repeated
   payout slot in a batch, and additional payout needing review.
 - **Review** follows the design doc: approve, hold for further review, correct, or reject. A
   correction is re-validated and re-screened, and its old/new values go to the audit trail.
 - Settings (`AMOUNT_LIMIT`, `DUPLICATE_WINDOW_HOURS`, `RECLAIM_AFTER_SECONDS`, `DATABASE_URL`, `AIDFLOW_DB`)
   can be overridden in `.env`.
+- Set `AMOUNT_LIMIT` to a positive amount or `off`. The amount rule adds a Review flag, and
+  the request can still be approved individually. Optional installment and benefit month
+  comparisons use approved batch schedules. See `data/samples/README.md`.
+- **Screening settings** on Home show the current program and asset policy. Operators can
+  preview the amount range and local request-time window against pending requests. Set
+  `SCREENING_POLICY_EDITING=on` on a trusted operator instance to enable saving. The reviewer
+  name is an audit label. Saving sets the policy for future imports and can also update the
+  amount and time flags for current pending requests. Held and decided requests keep their
+  recorded policy. A correction reuses the request's recorded policy.
 
 ## Testnet demo with real payouts
 

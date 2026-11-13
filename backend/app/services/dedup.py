@@ -27,7 +27,7 @@ def flag_duplicates(conn: db.Connection, refs: list[str]) -> None:
             if abs(t - t_other) <= window and is_later:
                 db.add_flags(conn, ref, [f"possible_duplicate_of:{other['request_ref']}"])
 
-        if row.get("batch_id"):
+        if config.CHECK_BATCH_PAYOUT_SLOT and row.get("batch_id"):
             same_batch = conn.execute(
                 "SELECT request_ref, created_at FROM requests WHERE beneficiary_id = ?"
                 " AND batch_id = ? AND payout_slot = ? AND request_ref != ? AND status NOT IN (?, ?)",

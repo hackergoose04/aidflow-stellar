@@ -4,22 +4,23 @@ import Link from "next/link";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   get, payAll, post, uploadCsv,
-  type AidRequest, type ClaimResult, type Delivery, type DeliveryCost, type Summary, type UploadReport, type VerifyResult, type Wallet,
+  type AidRequest, type ClaimResult, type Delivery, type MlMetrics, type ReconEval, type Summary, type UploadReport, type VerifyResult, type Wallet,
 } from "@/lib/api";
-import { formatDuration, formatHours, shortKey } from "@/lib/format";
-import { Button, ErrorNote, Notice, useReviewer } from "@/components/ui";
+import { formatAmount, formatHours, shortKey } from "@/lib/format";
+import { Button, Card, ErrorNote, Notice, useReviewer } from "@/components/ui";
+import { BatchBars, ReviewReasonBars, RiskHistogram, StatusDonut } from "@/components/Charts";
+import { SimulatedResults } from "@/components/SimulatedResults";
+import { ScreeningSettings } from "@/components/ScreeningSettings";
 
-const PAID = new Set(["CONFIRMED", "CLAIMED"]);
 const SENT = new Set(["SUBMITTED", "UNKNOWN", "CONFIRMED", "CLAIMED", "FAILED"]);
-const DAYS = 14;
 
 /** 2980.5 -> "2,980" + ".50": the decimals are drawn lighter, like a bank statement. */
-function Money({ value, unit = true, className = "" }: { value: number; unit?: boolean; className?: string }) {
+function Money({ value, asset, className = "" }: { value: number; asset?: string; className?: string }) {
   const [whole, cents] = value.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 }).split(".");
   return (
     <span className={`tabular-nums ${className}`}>
       {whole}<span className="text-zinc-400">.{cents}</span>
-      {unit && <span className="ml-1.5 text-[0.45em] font-medium tracking-normal text-zinc-500">AIDUSD</span>}
+      {asset && <span className="ml-1.5 text-[0.45em] font-medium tracking-normal text-zinc-500">{asset}</span>}
     </span>
   );
 }
@@ -57,37 +58,20 @@ function paymentState(r: AidRequest): { label: string; tone: string } {
   return { label: "Sending", tone: "bg-blue-50 text-blue-800" };
 }
 
-/** Money that reached people, per day, for the last DAYS days (today last). */
-function deliveredByDay(rows: AidRequest[]): { day: Date; amount: number }[] {
-  const start = new Date();
-  start.setHours(0, 0, 0, 0);
-  const days = Array.from({ length: DAYS }, (_, i) => {
-    const d = new Date(start);
-    d.setDate(d.getDate() - (DAYS - 1 - i));
-    return { day: d, amount: 0 };
-  });
-  for (const r of rows) {
-    if (!PAID.has(r.status) || !r.submitted_at) continue;
-    const t = new Date(r.submitted_at);
-    t.setHours(0, 0, 0, 0);
-    const i = Math.round((t.getTime() - days[0].day.getTime()) / 86400000);
-    if (i >= 0 && i < DAYS) days[i].amount += Number(r.amount);
-  }
-  return days;
-}
-
 export default function Home() {
   const [summary, setSummary] = useState<Summary | null>(null);
   const [rows, setRows] = useState<AidRequest[] | null>(null);
   const [wallet, setWallet] = useState<Wallet | null>(null);
   const [delivery, setDelivery] = useState<Delivery | null>(null);
-  const [cost, setCost] = useState<DeliveryCost | null>(null);
+  const [walletError, setWalletError] = useState<string | null>(null);
+  const [metrics, setMetrics] = useState<MlMetrics | null>(null);
+  const [recon, setRecon] = useState<ReconEval | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
   const [progress, setProgress] = useState("");
   const [message, setMessage] = useState<React.ReactNode>(null);
   const [upload, setUpload] = useState<UploadReport | null>(null);
-  const [reviewer] = useReviewer();
+  const [reviewer, setReviewer] = useReviewer();
   const fileRef = useRef<HTMLInputElement>(null);
 
   const refresh = useCallback(async () => {
@@ -99,11 +83,14 @@ export default function Home() {
     } catch (e) {
       setError((e as Error).message);
     }
-    get<Wallet>("/wallet").then(setWallet, () => setWallet(null));
+    get<Wallet>("/wallet").then((value) => { setWallet(value); setWalletError(null); }, (err: Error) => { setWallet(null); setWalletError(err.message); });
     get<Delivery>("/delivery").then(setDelivery, () => setDelivery(null));
-    get<DeliveryCost>("/delivery/cost").then(setCost, () => setCost(null));
   }, []);
-  useEffect(() => { refresh(); }, [refresh]);
+  useEffect(() => {
+    refresh();
+    get<MlMetrics>("/ml/metrics").then(setMetrics, () => setMetrics(null));
+    get<ReconEval>("/eval/recon").then(setRecon, () => setRecon(null));
+  }, [refresh]);
 
   async function run<T>(label: string, fn: () => Promise<T>, done: (r: T) => React.ReactNode) {
     setBusy(label);
@@ -129,12 +116,6 @@ export default function Home() {
   const unclaimed = delivery?.unclaimed ?? [];
   const mismatches = summary?.recon.MISMATCH ?? 0;
 
-  const paidRows = all.filter((r) => PAID.has(r.status));
-  const paidAmount = paidRows.reduce((n, r) => n + Number(r.amount), 0);
-  const paidPeople = new Set(paidRows.map((r) => r.beneficiary_id)).size;
-  const days = useMemo(() => deliveredByDay(all), [all]);
-  const today = days[days.length - 1].amount;
-  const stopped = summary?.registry.BLOCKED ?? 0;
   const recent = all.filter((r) => SENT.has(r.status))
     .sort((a, b) => (b.submitted_at ?? b.updated_at).localeCompare(a.submitted_at ?? a.updated_at))
     .slice(0, 8);
@@ -143,12 +124,12 @@ export default function Home() {
   if (flagged) tasks.push({
     key: "review", tone: "bg-amber-500",
     title: <><b>{flagged}</b> {flagged === 1 ? "request needs" : "requests need"} a decision</>,
-    detail: "Flagged by a rule or the AI model. Nothing is paid until a person approves it.",
+    detail: "Open Review to inspect flags, held requests and invalid records.",
     action: <Link href="/review"><Button size="sm">Review</Button></Link>,
   });
   if (clean > 0) tasks.push({
     key: "clean", tone: "bg-emerald-500",
-    title: <><b>{clean}</b> {clean === 1 ? "request" : "requests"} passed every check</>,
+    title: <><b>{clean}</b> {clean === 1 ? "request has" : "requests have"} no review flags</>,
     detail: reviewer.trim() ? `Approve them in one step as ${reviewer.trim()}.` : "Enter your name at the top right to approve them.",
     action: <Button size="sm" variant="secondary" disabled={!!busy || !reviewer.trim()}
       onClick={() => run("approve", () => post<{ approved: number }>("/review/approve-clean", { reviewer }),
@@ -185,8 +166,9 @@ export default function Home() {
     });
   }
 
-  const balance = wallet ? Number(wallet.balances.AIDUSD ?? 0) : null;
-  const toHand = delivery?.timing.approved_to_hand;
+  const asset = summary?.asset_code ?? "AIDUSD";
+  const balance = wallet ? Number(wallet.balances[asset] ?? 0) : null;
+  const threshold = summary?.risk_threshold ?? null;
 
   return (
     <>
@@ -218,60 +200,30 @@ export default function Home() {
         </Notice>
       )}
 
-      {/* Balance and what has reached people */}
+      {/* Upload, screening and payment controls */}
       <section className="flex flex-wrap gap-6">
         <div className="flex min-w-0 flex-[1_1_340px] flex-col rounded-2xl border border-zinc-200 bg-white p-7">
           <div className="text-[13px] text-zinc-500">Available to disburse</div>
           <div className="mt-2 text-[44px] font-semibold leading-none tracking-[-0.03em] text-zinc-900">
-            {balance !== null ? <Money value={balance} /> : <span className="text-zinc-300">—</span>}
-          </div>
-          <div className="mt-3 text-[13px] text-zinc-500">
-            {(summary?.registry.program ?? "Aid programme").replace(/-\d{4}-\d{4}$/, "")}
-            {wallet && <> · <a href={wallet.explorer} target="_blank" rel="noreferrer" className="link font-mono text-[12px]">{shortKey(wallet.account, 4)} ↗</a></>}
+            {balance !== null ? <Money value={balance} asset={asset} /> : <span className="text-zinc-300">—</span>}
           </div>
           <div className="mt-auto flex flex-wrap gap-2.5 pt-7">
             <Button className="h-11 px-5 text-[14px]" onClick={() => fileRef.current?.click()} disabled={!!busy}>
               {busy === "upload" ? "Uploading…" : "New batch"}
             </Button>
+            <ScreeningSettings asset={asset} reviewer={reviewer} onReviewerChange={setReviewer}
+              editable={summary?.screening_policy_editable ?? false} onSave={refresh} />
             <Button variant="secondary" className="h-11 px-5 text-[14px]" onClick={send} disabled={!!busy || !approvedRows.length}
-              title={approvedRows.length ? `${approvedAmount.toFixed(2)} AIDUSD, about 15 seconds per payment` : "Nothing approved to send"}>
+              title={approvedRows.length ? `${approvedAmount.toFixed(2)} ${asset}, about 15 seconds per payment` : "Nothing approved to send"}>
               {busy === "pay" ? `Sending ${progress}…` : `Send approved${approvedRows.length ? ` · ${approvedRows.length}` : ""}`}
             </Button>
           </div>
+          <dl className="mt-4 grid gap-3 text-[13px] text-zinc-600 sm:grid-cols-2">
+            <div><dt className="font-medium text-zinc-900">New batch</dt><dd>Upload a CSV of payment requests to screen together.</dd></div>
+            <div><dt className="font-medium text-zinc-900">Screening settings</dt><dd>Set the amount range and payment window that send requests to Review.</dd></div>
+          </dl>
         </div>
 
-        <div className="min-w-0 flex-[2_1_520px] rounded-2xl border border-zinc-200 bg-white px-7 pt-6 pb-5">
-          <div className="text-[13px] text-zinc-500">Delivered to people</div>
-          <div className="mt-1.5 flex flex-wrap items-baseline gap-x-3 text-[26px] font-semibold tracking-[-0.02em] text-zinc-900">
-            <Money value={paidAmount} />
-            <span className="text-[13px] font-medium tracking-normal text-zinc-500">
-              {paidPeople} {paidPeople === 1 ? "person" : "people"}
-              {today > 0 && <span className="ml-2 text-emerald-700">+{today.toLocaleString("en-US", { maximumFractionDigits: 2 })} today</span>}
-            </span>
-          </div>
-          <DayBars days={days} />
-        </div>
-      </section>
-
-      {/* Key figures in one strip */}
-      <section className="mt-6 grid overflow-hidden rounded-2xl border border-zinc-200 bg-white sm:grid-cols-2 lg:grid-cols-4">
-        <Figure label="Approval → money in hand"
-          value={toHand?.n ? formatDuration(toHand.median_s) : "—"}
-          note={toHand?.n ? `median of ${toHand.n} · bank transfers take days` : "no payments in hand yet"} />
-        <Figure label="Fees per payout"
-          value={cost?.payouts ? <>${(cost.avg_fee_usd ?? 0).toFixed(3)} <span className="text-[13px] font-medium text-zinc-500">{((cost.cost_share ?? 0) * 100).toFixed(2)}%</span></> : "—"}
-          note={cost?.payouts ? "of the amount · remittances average 6.4%" : cost ? "no payments yet" : "reading fees from Stellar…"} />
-        <Figure label="Duplicates stopped" value={String(stopped)} note="blocked by the on-chain registry" />
-        {summary?.last_recon ? (
-          <Figure label="Records vs Stellar"
-            value={mismatches
-              ? <span className="text-rose-700">{mismatches} mismatch{mismatches === 1 ? "" : "es"}</span>
-              : <span className="inline-flex items-center gap-2"><Check />All match</span>}
-            note={`checked ${ago(summary.last_recon)}`} />
-        ) : (
-          <Figure label="Records vs Stellar" value={<span className="text-zinc-400">Not checked</span>}
-            note={<Link href="/recon?run=1" className="link">Run the check →</Link>} />
-        )}
       </section>
 
       {tasks.length > 0 && (
@@ -291,6 +243,45 @@ export default function Home() {
           </ul>
         </section>
       )}
+
+      <div className="mt-8 grid items-start gap-6 lg:grid-cols-3">
+        <div className="grid min-w-0 gap-6 lg:col-span-2">
+          <Card title="Requests by status">{s && <StatusDonut counts={s} />}</Card>
+          <Card title="Review reasons" action={<Link className="link" href="/review">Open Review</Link>}>
+            {summary && <ReviewReasonBars reasons={summary.review_reasons ?? {}} total={flagged} />}
+          </Card>
+          <Card title="AI risk distribution">
+            {summary?.risk_histogram.some(Boolean)
+              ? <RiskHistogram bins={summary.risk_histogram} flagged={summary.risk_histogram_flagged} threshold={threshold} />
+              : <p className="text-[13px] text-zinc-500">No ML scores yet.</p>}
+          </Card>
+        </div>
+        <Card title="Accounts on Stellar">
+          <dl className="space-y-4 text-[13px]">
+            <div>
+              <dt className="text-zinc-500">NGO wallet</dt>
+              <dd className="mt-1 flex flex-wrap items-center gap-x-3">
+                {wallet ? <><a href={wallet.explorer} target="_blank" rel="noreferrer" className="link font-mono text-[12px]">{shortKey(wallet.account, 6)} ↗</a>
+                  <span className="tabular-nums">{formatAmount(wallet.balances.XLM ?? 0)} XLM</span></>
+                  : <span className="text-zinc-500">{walletError ?? "Loading wallet…"}</span>}
+              </dd>
+            </div>
+            {summary?.registry.enabled && <div className="border-t border-zinc-100 pt-3">
+              <dt className="text-zinc-500">Payout registry · Soroban</dt>
+              <dd className="mt-1">
+                {summary.registry.explorer && <a href={summary.registry.explorer} target="_blank" rel="noreferrer" className="link font-mono text-[12px]">{shortKey(summary.registry.contract, 6)} ↗</a>}
+                <div className="mt-2 flex flex-wrap gap-3 text-[12px]">
+                  <span>{summary.registry.PAID ?? 0} paid</span><span>{summary.registry.BLOCKED ?? 0} blocked</span><span>{summary.registry.RESERVED ?? 0} reserved</span>
+                </div>
+              </dd>
+            </div>}
+          </dl>
+        </Card>
+      </div>
+
+      <Card title="Batches" className="mt-8" action={<Link className="link" href="/requests">Filter requests by batch</Link>}>
+        {summary?.batches.length ? <BatchBars batches={summary.batches} /> : <p className="text-[13px] text-zinc-500">No batches yet. Upload a CSV to get started.</p>}
+      </Card>
 
       <section className="mt-8">
         <div className="mb-3 flex items-center justify-between gap-3">
@@ -334,8 +325,8 @@ export default function Home() {
                       </td>
                       <td className="px-3 py-3.5 whitespace-nowrap text-zinc-600">{ago(r.claimed_at ?? r.submitted_at ?? r.updated_at)}</td>
                       <td className="py-3.5 pr-6 pl-3 text-right font-medium text-zinc-900">
-                        <Money value={Number(r.amount)} unit={false} />
-                        <span className="ml-1.5 text-[12px] font-normal text-zinc-400">AIDUSD</span>
+                        <Money value={Number(r.amount)} />
+                        <span className="ml-1.5 text-[12px] font-normal text-zinc-400">{r.asset}</span>
                       </td>
                     </tr>
                   );
@@ -344,62 +335,16 @@ export default function Home() {
             </table>
           ) : (
             <div className="px-6 py-12 text-center text-[14px] text-zinc-500">
-              No payments yet. <button className="link" onClick={() => fileRef.current?.click()}>Upload a batch</button> to get started.
+              {all.length ? "No payments sent yet. Uploaded requests are listed in Batches." : <>No payments yet. <button className="link" onClick={() => fileRef.current?.click()}>Upload a batch</button> to get started.</>}
             </div>
           )}
         </div>
       </section>
+      <details className="mt-8 rounded-2xl border border-zinc-200 bg-white px-5 py-4">
+        <summary className="cursor-pointer text-[13px] font-medium">Simulated demo results</summary>
+        <div className="mt-4">{metrics ? <SimulatedResults m={metrics} recon={recon} /> : <p className="text-[13px] text-zinc-500">Saved demo metrics are unavailable.</p>}</div>
+      </details>
     </>
-  );
-}
-
-/** One bar per day; empty days get a thin grey stub so the axis still reads. Hover shows the day's figure. */
-function DayBars({ days }: { days: { day: Date; amount: number }[] }) {
-  const max = Math.max(...days.map((d) => d.amount), 1);
-  const fmt = (d: Date) => d.toLocaleDateString("en-GB", { day: "numeric", month: "short" });
-  return (
-    <figure className="mt-5" aria-label={`AIDUSD delivered per day, last ${days.length} days`}>
-      <div className="relative flex h-36 items-end gap-[6px] border-b border-zinc-200">
-        {[0.33, 0.66, 1].map((y) => (
-          <span key={y} className="pointer-events-none absolute inset-x-0 border-t border-zinc-100" style={{ bottom: `${y * 100}%` }} />
-        ))}
-        {days.map((d, i) => {
-          const last = i === days.length - 1;
-          return (
-            <div key={i} className="group relative flex h-full flex-1 items-end">
-              <span className={`block w-full rounded-t-[4px] ${d.amount ? "bg-accent" : "bg-zinc-200"}`}
-                style={{ height: d.amount ? `${Math.max((d.amount / max) * 100, 4)}%` : 3 }} />
-              <span className="pointer-events-none absolute bottom-full left-1/2 z-10 mb-2 -translate-x-1/2 whitespace-nowrap rounded-md bg-zinc-900 px-2 py-1 text-[11px] text-white opacity-0 shadow transition-opacity group-hover:opacity-100">
-                {last ? "Today" : fmt(d.day)} · {d.amount.toLocaleString("en-US", { maximumFractionDigits: 2 })} AIDUSD
-              </span>
-            </div>
-          );
-        })}
-      </div>
-      <figcaption className="mt-2 flex justify-between text-[11px] text-zinc-400">
-        <span>{fmt(days[0].day)}</span>
-        <span>{fmt(days[Math.floor(days.length / 2)].day)}</span>
-        <span>Today</span>
-      </figcaption>
-    </figure>
-  );
-}
-
-function Figure({ label, value, note }: { label: string; value: React.ReactNode; note: React.ReactNode }) {
-  return (
-    <div className="border-zinc-100 px-6 py-5 max-lg:border-b sm:max-lg:odd:border-r lg:border-r lg:last:border-r-0 max-sm:last:border-b-0 sm:max-lg:[&:nth-last-child(-n+2)]:border-b-0">
-      <div className="text-[13px] text-zinc-500">{label}</div>
-      <div className="mt-1.5 text-[22px] font-semibold tracking-[-0.01em] tabular-nums text-zinc-900">{value}</div>
-      <div className="mt-1 text-[12px] text-zinc-500">{note}</div>
-    </div>
-  );
-}
-
-function Check() {
-  return (
-    <svg viewBox="0 0 16 16" className="h-[18px] w-[18px] text-emerald-700" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round" aria-hidden>
-      <path d="m3.5 8.5 3 3 6-7" />
-    </svg>
   );
 }
 
