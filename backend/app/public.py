@@ -10,7 +10,6 @@ browser and reads the transaction straight from Stellar to check memo, amount an
 """
 from __future__ import annotations
 
-import sqlite3
 
 from fastapi import APIRouter, Depends, HTTPException
 
@@ -53,14 +52,15 @@ def _payment(row: dict) -> dict:
 
 
 @router.get("/summary")
-def summary(conn: sqlite3.Connection = Depends(_conn)) -> dict:
+def summary(conn: db.Connection = Depends(_conn)) -> dict:
     batches = [dict(r) for r in conn.execute("""
         SELECT batch_id,
                SUM(CASE WHEN status NOT IN ('INVALID') THEN 1 ELSE 0 END) AS requests,
                SUM(CASE WHEN status IN ('CONFIRMED','CLAIMED') THEN 1 ELSE 0 END) AS paid,
                SUM(CASE WHEN status = 'CLAIMED' OR (status = 'CONFIRMED' AND method = 'payment') THEN 1 ELSE 0 END) AS received,
                SUM(CASE WHEN status IN ('APPROVED','SUBMITTED','UNKNOWN') THEN 1 ELSE 0 END) AS in_progress,
-               ROUND(SUM(CASE WHEN status IN ('CONFIRMED','CLAIMED') THEN CAST(amount AS REAL) ELSE 0 END), 2) AS amount_paid,
+               CAST(ROUND(SUM(CASE WHEN status IN ('CONFIRMED','CLAIMED') THEN CAST(amount AS NUMERIC) ELSE 0 END), 2)
+                    AS DOUBLE PRECISION) AS amount_paid,
                SUM(CASE WHEN status IN ('CONFIRMED','CLAIMED') AND recon_status = 'MATCHED' THEN 1 ELSE 0 END) AS reconciled,
                MAX(asset) AS asset
         FROM requests GROUP BY batch_id ORDER BY batch_id""")]
@@ -78,7 +78,7 @@ def summary(conn: sqlite3.Connection = Depends(_conn)) -> dict:
 
 
 @router.get("/batches/{batch_id}")
-def batch(batch_id: str, conn: sqlite3.Connection = Depends(_conn)) -> list[dict]:
+def batch(batch_id: str, conn: db.Connection = Depends(_conn)) -> list[dict]:
     rows = [dict(r) for r in conn.execute(
         "SELECT * FROM requests WHERE batch_id = ? AND status != 'INVALID' ORDER BY request_ref",
         (batch_id,))]
@@ -88,7 +88,7 @@ def batch(batch_id: str, conn: sqlite3.Connection = Depends(_conn)) -> list[dict
 
 
 @router.get("/claimable")
-def claimable(wallet: str, conn: sqlite3.Connection = Depends(_conn)) -> list[dict]:
+def claimable(wallet: str, conn: db.Connection = Depends(_conn)) -> list[dict]:
     """Payouts waiting for this wallet to claim them (for the beneficiary's own claim page).
 
     Public like the rest of this router: a wallet's claimable balances are already visible on
@@ -112,7 +112,7 @@ def claimable(wallet: str, conn: sqlite3.Connection = Depends(_conn)) -> list[di
 
 
 @router.get("/payments/{ref}")
-def payment(ref: str, conn: sqlite3.Connection = Depends(_conn)) -> dict:
+def payment(ref: str, conn: db.Connection = Depends(_conn)) -> dict:
     row = db.get(conn, ref)
     if row is None:
         raise HTTPException(404, f"no payment {ref}")
