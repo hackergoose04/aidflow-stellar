@@ -193,7 +193,11 @@ export default function Home() {
       <input ref={fileRef} type="file" accept=".csv,text/csv" className="hidden"
         onChange={(e) => {
           const f = e.target.files?.[0];
-          if (f) run("upload", () => uploadCsv(f), (r) => { setUpload(r); return `Uploaded ${f.name}: ${r.accepted} requests added.`; });
+          // Nothing accepted is not a success: the warning below explains why, so no green message.
+          if (f) run("upload", () => uploadCsv(f), (r) => {
+            setUpload(r);
+            return r.accepted ? `Uploaded ${f.name}: ${r.accepted} ${r.accepted === 1 ? "request" : "requests"} added.` : null;
+          });
           e.target.value = "";
         }} />
       <h1 className="sr-only">Home</h1>
@@ -202,9 +206,15 @@ export default function Home() {
       {message && <Notice tone="success">{message}</Notice>}
       {upload && upload.rejected.length > 0 && (
         <Notice tone="warning">
-          {upload.rejected.length} {upload.rejected.length === 1 ? "row was" : "rows were"} not accepted:{" "}
-          {upload.rejected.slice(0, 3).map((r) => `line ${r.line} (${r.reasons.join(", ").replaceAll("_", " ")})`).join("; ")}
-          {upload.rejected.length > 3 && "…"}
+          {upload.accepted === 0 && upload.rejected.every((r) => r.reasons.includes("duplicate_ref")) ? (
+            <>Nothing new: all {upload.rejected.length} rows in this file were uploaded before. Duplicates are never added twice.</>
+          ) : (
+            <>
+              {upload.rejected.length} {upload.rejected.length === 1 ? "row was" : "rows were"} not accepted:{" "}
+              {upload.rejected.slice(0, 3).map((r) => `line ${r.line} (${r.reasons.join(", ").replaceAll("_", " ").replace("duplicate ref", "already uploaded")})`).join("; ")}
+              {upload.rejected.length > 3 && "…"}
+            </>
+          )}
         </Notice>
       )}
 
