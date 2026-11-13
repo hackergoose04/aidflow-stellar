@@ -55,6 +55,7 @@ cd contracts/aid_registry && cargo test && cargo build --target wasm32v1-none --
 python scripts/registry_deploy.py   # deploy once; backend then registers every payout
 python scripts/registry_demo.py     # duplicate approved by mistake -> refused on chain
 python scripts/make_demo_csv.py     # data/samples/demo_live.csv: small batch paying your own Testnet accounts
+python scripts/channels_setup.py    # optional: 10 channel accounts, so payouts run 10 at a time
 ```
 
 Details: [contracts/README.md](contracts/README.md).

@@ -3,7 +3,10 @@ MEMO_HASH = SHA-256(request_ref), submit via Horizon, verify via RPC with Horizo
 from __future__ import annotations
 
 import hashlib
+import os
 import time
+from contextlib import contextmanager
+from contextvars import ContextVar
 
 from stellar_sdk import Account, Asset, Claimant, ClaimPredicate, Keypair, Server, SorobanServer
 from stellar_sdk import TransactionBuilder
@@ -23,6 +26,31 @@ def rpc() -> SorobanServer:
 
 def distribution_keypair() -> Keypair:
     return Keypair.from_secret(config.secret("DISTRIBUTION"))
+
+
+# Channel accounts (CHANNEL_SECRETS, comma-separated): each is the source of a transaction and pays
+# its fee, while every operation inside stays sourced from DISTRIBUTION, so the money, the memo and
+# the registry's admin auth are unchanged. Stellar accepts about one transaction per source account
+# per ledger (~5 s); with K channels the executor runs K payouts side by side.
+_channel: ContextVar[Keypair | None] = ContextVar("payout_channel", default=None)
+
+
+def channel_keypairs() -> list[Keypair]:
+    return [Keypair.from_secret(s.strip()) for s in os.getenv("CHANNEL_SECRETS", "").split(",") if s.strip()]
+
+
+@contextmanager
+def using_channel(channel: Keypair | None):
+    """Transactions built in this block use `channel` as their source account."""
+    token = _channel.set(channel)
+    try:
+        yield
+    finally:
+        _channel.reset(token)
+
+
+def current_channel() -> Keypair | None:
+    return _channel.get()
 
 
 def aid_asset() -> Asset:
@@ -45,17 +73,22 @@ def has_trustline(wallet: str, asset: Asset) -> bool:
 
 def build_payout(source: Account, signer: Keypair, method: str, wallet: str, asset: Asset,
                  amount: str, request_ref: str):
+    """`source` is the loaded account of the current channel if one is set, else of `signer`."""
+    channel = current_channel()
+    op_source = signer.public_key if channel else None
     builder = TransactionBuilder(source, config.NETWORK_PASSPHRASE, base_fee=config.BASE_FEE)
     if method == "payment":
-        builder.append_payment_op(destination=wallet, asset=asset, amount=amount)
+        builder.append_payment_op(destination=wallet, asset=asset, amount=amount, source=op_source)
     else:
         window = ClaimPredicate.predicate_before_relative_time(config.RECLAIM_AFTER_SECONDS)
         builder.append_create_claimable_balance_op(asset=asset, amount=amount, claimants=[
             Claimant(destination=wallet, predicate=window),
             Claimant(destination=signer.public_key, predicate=ClaimPredicate.predicate_not(window)),
-        ])
+        ], source=op_source)
     tx = builder.add_hash_memo(memo_hash(request_ref)).set_timeout(config.TX_TIMEOUT_SECONDS).build()
     tx.sign(signer)
+    if channel:
+        tx.sign(channel)
     return tx
 
 

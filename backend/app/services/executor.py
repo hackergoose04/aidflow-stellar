@@ -6,9 +6,18 @@ For each request:
   2. build + sign -> store the tx hash as SUBMITTED (committed) -> submit once.
   3. (registry on) CONFIRMED -> mark the key PAID; FAILED -> release it so a retry can reserve it.
 The status update in step 2 is conditional on status = APPROVED, so two workers can't pay
-the same row."""
+the same row.
+
+Each payout is three transactions, each waiting for a ledger (~5 s): about 15 s. Stellar takes
+roughly one transaction per source account per ledger, so with one account payouts can only go
+one after another. With channel accounts (CHANNEL_SECRETS) each worker thread owns a channel as
+its transaction source and K payouts run side by side; the operations stay sourced from
+DISTRIBUTION, so the money, the memo and the registry auth are the same either way."""
 from __future__ import annotations
 
+import queue
+import threading
+from concurrent.futures import ThreadPoolExecutor
 
 from .. import config, db, registry, soroban, stellar_client as sc
 from ..db import Status
@@ -79,6 +88,7 @@ def _reserve(conn: db.Connection, row: dict) -> dict | None:
     key = (bytes.fromhex(row["registry_key"]) if row["registry_key"]
            else registry.key_for(row["beneficiary_id"], row["batch_id"], row["payout_slot"]))
     conn.execute("UPDATE requests SET registry_key = ? WHERE request_ref = ?", (key.hex(), ref))
+    conn.commit()  # don't hold a write lock (SQLite: the whole file) through the network call
     try:
         outcome, detail = registry.reserve(key, ref)
     except Exception as exc:  # RPC down, etc.: don't pay without the guard; try again later
@@ -108,7 +118,8 @@ def _reserve(conn: db.Connection, row: dict) -> dict | None:
     conn.execute("UPDATE requests SET registry_status = 'RESERVED' WHERE request_ref = ?", (ref,))
     if detail:
         db.log(conn, ref, "registry_reserved", {"tx_hash": detail})
-    elif (tx := _paid_on_chain_already(ref)):
+    conn.commit()
+    if not detail and (tx := _paid_on_chain_already(ref)):
         # The registry already held our reservation, yet locally this row is APPROVED: the database
         # lost the earlier submit (e.g. a reset mid-flight). The chain remembers; don't pay twice.
         conn.execute("UPDATE requests SET status = ?, tx_hash = ?, submitted_at = ?, error = ?, updated_at = ?"
@@ -118,58 +129,96 @@ def _reserve(conn: db.Connection, row: dict) -> dict | None:
         conn.commit()
         return {"request_ref": ref, "status": "SUBMITTED", "error": "earlier payout found on chain; run Verify",
                 "tx_hash": tx}
-    conn.commit()
     return None
 
 
 def run(conn: db.Connection, limit: int = 20, batch: str | None = None) -> list[dict]:
-    """Pay up to `limit` APPROVED requests, oldest first; `batch` restricts to one disbursement batch."""
-    dist, asset = sc.distribution_keypair(), sc.aid_asset()
-    server = sc.horizon()
-    use_registry = registry.enabled()
+    """Pay up to `limit` APPROVED requests, oldest first; `batch` restricts to one disbursement batch.
+
+    Without channel accounts this pays one request after another on `conn`. With them, one worker
+    per channel (each with its own database connection) takes requests from a shared queue."""
     sql, args = "SELECT request_ref FROM requests WHERE status = ?", [Status.APPROVED]
     if batch:
         sql += " AND batch_id = ?"
         args.append(batch)
     refs = [r["request_ref"] for r in conn.execute(sql + " ORDER BY created_at LIMIT ?", (*args, limit)).fetchall()]
+    conn.commit()  # end the read transaction before the workers write
+    channels = sc.channel_keypairs()[:len(refs)]
+    if not channels:
+        return [r for ref in refs if (r := _pay_one(conn, ref))]
 
-    results = []
+    todo: queue.Queue[str] = queue.Queue()
     for ref in refs:
-        row = db.get(conn, ref)
-        if not use_registry and (row["registry_key"] or row["payout_slot"] != config.DEFAULT_PAYOUT_SLOT):
-            results.append({"request_ref": ref, "status": Status.APPROVED,
-                            "error": "On-chain registry must be configured for this payout"})
-            continue
-        if use_registry:
-            stop = _reserve(conn, row)
-            if stop:
-                results.append(stop)
-                continue
+        todo.put(ref)
+    done: dict[str, dict] = {}
+    lock = threading.Lock()
 
-        method = "payment" if sc.has_trustline(row["wallet"], asset) else "claimable_balance"
-        source = server.load_account(dist.public_key)  # fresh sequence number per tx
-        tx = sc.build_payout(source, dist, method, row["wallet"], asset, row["amount"], ref)
-        tx_hash = tx.hash_hex()
+    def worker(channel) -> None:
+        wconn = db.connect()
+        try:
+            with sc.using_channel(channel):
+                while True:
+                    try:
+                        ref = todo.get_nowait()
+                    except queue.Empty:
+                        return
+                    try:
+                        result = _pay_one(wconn, ref)
+                    except Exception as exc:  # one bad payout must not stop the other workers
+                        wconn.rollback()
+                        db.log(wconn, ref, "payout_error", {"error": str(exc)[:300]})
+                        wconn.commit()
+                        result = {"request_ref": ref, "status": db.get(wconn, ref)["status"],
+                                  "error": f"{type(exc).__name__}: {exc}"[:200]}
+                    if result:
+                        with lock:
+                            done[ref] = result
+        finally:
+            wconn.close()
 
-        claimed = conn.execute(
-            "UPDATE requests SET status = ?, method = ?, tx_hash = ?, submitted_at = ?, updated_at = ?"
-            " WHERE request_ref = ? AND status = ?",
-            (Status.SUBMITTED, method, tx_hash, db.now(), db.now(), ref, Status.APPROVED)).rowcount
-        if claimed != 1:
-            continue  # someone else picked it up
-        db.log(conn, ref, "submitted", {"tx_hash": tx_hash, "method": method})
-        conn.commit()  # the hash is on disk BEFORE the network sees the tx
+    with ThreadPoolExecutor(max_workers=len(channels)) as pool:
+        for f in [pool.submit(worker, ch) for ch in channels]:
+            f.result()
+    return [done[ref] for ref in refs if ref in done]
 
-        status, error = sc.submit(tx)
-        claim = "UNCLAIMED" if status == Status.CONFIRMED and method == "claimable_balance" else None
-        conn.execute("UPDATE requests SET status = ?, error = ?, claim_status = ?, updated_at = ?"
-                     " WHERE request_ref = ?", (status, error, claim, db.now(), ref))
-        db.log(conn, ref, status.lower(), {"tx_hash": tx_hash, "error": error})
+
+def _pay_one(conn: db.Connection, ref: str) -> dict | None:
+    """Pay one APPROVED request. None if another worker already took it."""
+    dist, asset = sc.distribution_keypair(), sc.aid_asset()
+    use_registry = registry.enabled()
+    row = db.get(conn, ref)
+    if not use_registry and (row["registry_key"] or row["payout_slot"] != config.DEFAULT_PAYOUT_SLOT):
+        return {"request_ref": ref, "status": Status.APPROVED,
+                "error": "On-chain registry must be configured for this payout"}
+    if use_registry:
+        stop = _reserve(conn, row)
+        if stop:
+            return stop
+
+    method = "payment" if sc.has_trustline(row["wallet"], asset) else "claimable_balance"
+    source = sc.horizon().load_account((sc.current_channel() or dist).public_key)  # fresh sequence per tx
+    tx = sc.build_payout(source, dist, method, row["wallet"], asset, row["amount"], ref)
+    tx_hash = tx.hash_hex()
+
+    claimed = conn.execute(
+        "UPDATE requests SET status = ?, method = ?, tx_hash = ?, submitted_at = ?, updated_at = ?"
+        " WHERE request_ref = ? AND status = ?",
+        (Status.SUBMITTED, method, tx_hash, db.now(), db.now(), ref, Status.APPROVED)).rowcount
+    if claimed != 1:
         conn.commit()
-        if use_registry:
-            settle_registry(conn, ref, status)
-            conn.commit()
-        results.append({"request_ref": ref, "method": method, "status": status, "error": error,
-                        "tx_hash": tx_hash, "explorer": sc.explorer_link(tx_hash),
-                        "registry": db.get(conn, ref).get("registry_status")})
-    return results
+        return None  # someone else picked it up
+    db.log(conn, ref, "submitted", {"tx_hash": tx_hash, "method": method})
+    conn.commit()  # the hash is on disk BEFORE the network sees the tx
+
+    status, error = sc.submit(tx)
+    claim = "UNCLAIMED" if status == Status.CONFIRMED and method == "claimable_balance" else None
+    conn.execute("UPDATE requests SET status = ?, error = ?, claim_status = ?, updated_at = ?"
+                 " WHERE request_ref = ?", (status, error, claim, db.now(), ref))
+    db.log(conn, ref, status.lower(), {"tx_hash": tx_hash, "error": error})
+    conn.commit()
+    if use_registry:
+        settle_registry(conn, ref, status)
+        conn.commit()
+    return {"request_ref": ref, "method": method, "status": status, "error": error,
+            "tx_hash": tx_hash, "explorer": sc.explorer_link(tx_hash),
+            "registry": db.get(conn, ref).get("registry_status")}

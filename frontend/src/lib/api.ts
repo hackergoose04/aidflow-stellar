@@ -137,6 +137,8 @@ export interface Summary {
   last_recon: string | null;
   batches: BatchSummary[];
   risk_histogram: number[];
+  /** Payouts the backend sends side by side (one per channel account; 1 without channels). */
+  payout_lanes?: number;
   registry: {
     enabled: boolean;
     contract: string | null;
@@ -215,8 +217,13 @@ export interface PublicSummary {
 }
 
 /** Pay approved requests a few at a time, so the caller can refresh the table and show progress.
- *  Each payout is three Testnet transactions (register, pay, mark paid), roughly 15 s. */
-export async function payAll(onChunk: (done: number) => void | Promise<void>, batch = "", chunk = 5): Promise<PayoutResult[]> {
+ *  Each payout is three Testnet transactions (register, pay, mark paid), roughly 15 s. With channel
+ *  accounts the backend sends `payout_lanes` payouts side by side, so each call asks for that many. */
+export async function payAll(onChunk: (done: number) => void | Promise<void>, batch = "", chunk?: number): Promise<PayoutResult[]> {
+  if (!chunk) {
+    const lanes = await get<Summary>("/summary").then((s) => s.payout_lanes ?? 1, () => 1);
+    chunk = Math.max(5, lanes);
+  }
   const all: PayoutResult[] = [];
   const q = batch ? `&batch=${encodeURIComponent(batch)}` : "";
   for (;;) {
