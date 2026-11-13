@@ -8,3 +8,6 @@ ml/data/
 # Lists of real mainnet accounts flagged as anomalous: kept local, never published
 ml/reports/*_top.csv
 .DS_Store
+# Vercel CLI link and the env file it pulls
+.vercel
+.env.local
