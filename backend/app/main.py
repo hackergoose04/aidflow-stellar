@@ -36,6 +36,8 @@ async def json_errors(request, call_next):
 app.add_middleware(
     CORSMiddleware,
     allow_origins=os.getenv("CORS_ORIGINS", "http://localhost:3000,http://127.0.0.1:3000").split(","),
+    # Deployed: also the frontend's preview URLs, e.g. https://aidflow-web-.*\.vercel\.app
+    allow_origin_regex=os.getenv("CORS_ORIGIN_REGEX") or None,
     allow_methods=["*"],
     allow_headers=["*"],
 )
