@@ -2,42 +2,22 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
+import { useEffect, useState } from "react";
+import { get, type Summary } from "@/lib/api";
 import { useReviewer } from "@/components/ui";
 
-type IconName = "home" | "inbox" | "list" | "send" | "scale" | "globe" | "wallet" | "chart";
-
-const ICON_PATHS: Record<IconName, string> = {
-  home: "M3 10.5 12 3l9 7.5V20a1 1 0 0 1-1 1h-5v-6h-6v6H4a1 1 0 0 1-1-1z",
-  inbox: "M22 12h-6l-2 3h-4l-2-3H2 M5.45 5.11 2 12v6a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2v-6l-3.45-6.89A2 2 0 0 0 16.76 4H7.24a2 2 0 0 0-1.79 1.11z",
-  list: "M8 6h13 M8 12h13 M8 18h13 M3 6h.01 M3 12h.01 M3 18h.01",
-  send: "M22 2 11 13 M22 2l-7 20-4-9-9-4z",
-  scale: "M16 3h5v5 M8 21H3v-5 M21 3l-7 7 M3 21l7-7",
-  globe: "M12 2a10 10 0 1 0 0 20 10 10 0 0 0 0-20z M2 12h20 M12 2a15 15 0 0 1 0 20 M12 2a15 15 0 0 0 0 20",
-  wallet: "M20 7H4a2 2 0 0 0-2 2v9a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2V9a2 2 0 0 0-2-2z M16 3H6a2 2 0 0 0-2 2v2 M16 14h.01",
-  chart: "M3 3v18h18 M7 15l4-5 3 3 5-7",
-};
-
-function Icon({ name, className = "h-4 w-4" }: { name: IconName; className?: string }) {
-  return (
-    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.75} strokeLinecap="round"
-      strokeLinejoin="round" className={className} aria-hidden>
-      <path d={ICON_PATHS[name]} />
-    </svg>
-  );
-}
-
-const OPS: { href: string; label: string; icon: IconName }[] = [
-  { href: "/", label: "Overview", icon: "home" },
-  { href: "/review", label: "Review", icon: "inbox" },
-  { href: "/requests", label: "Requests", icon: "list" },
-  { href: "/payouts", label: "Payouts", icon: "send" },
-  { href: "/recon", label: "Reconciliation", icon: "scale" },
-  { href: "/evaluation", label: "Evaluation", icon: "chart" },
+const OPS: { href: string; label: string }[] = [
+  { href: "/", label: "Home" },
+  { href: "/review", label: "Review" },
+  { href: "/requests", label: "Requests" },
+  { href: "/payouts", label: "Payments" },
+  { href: "/recon", label: "Reconciliation" },
+  { href: "/evaluation", label: "Evaluation" },
 ];
 
 function Logo() {
   return (
-    <span className="grid h-7 w-7 place-items-center rounded-md bg-zinc-900">
+    <span className="grid h-7 w-7 place-items-center rounded-lg bg-accent">
       <svg viewBox="0 0 16 16" className="h-4 w-4" fill="none" stroke="white" strokeWidth={1.8} strokeLinecap="round">
         <path d="M2 11c3 0 3-6 6-6s3 6 6 6" />
       </svg>
@@ -45,14 +25,13 @@ function Logo() {
   );
 }
 
-function NavLink({ href, label, icon, active }: { href: string; label: string; icon: IconName; active: boolean }) {
+function NavLink({ href, label, active, badge }: { href: string; label: string; active: boolean; badge?: number }) {
   return (
-    <Link href={href}
-      className={`dock-item flex items-center gap-2.5 rounded-md px-2 py-1.5 text-[13px] transition-[color,background-color,transform] duration-200 ${
-        active ? "bg-white font-medium text-zinc-900 shadow-[0_0_0_1px_rgba(0,0,0,0.06),0_1px_2px_rgba(0,0,0,0.04)]"
-          : "text-zinc-600 hover:bg-zinc-200/50 hover:text-zinc-900"}`}>
-      <Icon name={icon} className={`h-4 w-4 ${active ? "text-zinc-900" : "text-zinc-400"}`} />
+    <Link href={href} aria-current={active ? "page" : undefined}
+      className={`inline-flex h-8 shrink-0 items-center gap-1.5 rounded-lg px-3 text-[14px] transition-colors ${
+        active ? "bg-zinc-100 font-medium text-zinc-900" : "text-zinc-600 hover:bg-zinc-50 hover:text-zinc-900"}`}>
       {label}
+      {!!badge && <span className="rounded-full bg-amber-100 px-1.5 text-[11px] font-medium tabular-nums text-amber-800">{badge}</span>}
     </Link>
   );
 }
@@ -60,15 +39,13 @@ function NavLink({ href, label, icon, active }: { href: string; label: string; i
 function ReviewerField() {
   const [name, setName] = useReviewer();
   return (
-    <label className="block">
-      <span className="mb-1 block text-[11px] text-zinc-500">Reviewing as</span>
-      <div className="flex items-center gap-2 rounded-md border border-zinc-200 bg-white px-2 py-1">
-        <span className="grid h-5 w-5 shrink-0 place-items-center rounded-full bg-zinc-200 text-[10px] font-semibold uppercase text-zinc-600">
-          {name.trim()[0] ?? "?"}
-        </span>
-        <input value={name} onChange={(e) => setName(e.target.value)} placeholder="Your name"
-          className="min-w-0 flex-1 bg-transparent text-[13px] text-zinc-900 placeholder:text-zinc-400 focus:outline-none" />
-      </div>
+    <label className="flex h-8 items-center gap-2 rounded-full border border-zinc-200 bg-white pr-3 pl-1" title="Your name is recorded on every decision">
+      <span className="grid h-6 w-6 shrink-0 place-items-center rounded-full bg-zinc-200 text-[11px] font-semibold uppercase text-zinc-700">
+        {name.trim()[0] ?? "?"}
+      </span>
+      <span className="sr-only">Reviewing as</span>
+      <input value={name} onChange={(e) => setName(e.target.value)} placeholder="Your name"
+        className="w-24 bg-transparent text-[13px] text-zinc-900 placeholder:text-zinc-400 focus:outline-none" />
     </label>
   );
 }
@@ -85,6 +62,13 @@ function NetworkPill() {
 export function Shell({ children }: { children: React.ReactNode }) {
   const path = usePathname();
   const isActive = (href: string) => (href === "/" ? path === "/" : path.startsWith(href));
+  // Requests waiting for a person, shown on the Review tab. Refreshed on every navigation.
+  const [toReview, setToReview] = useState(0);
+  useEffect(() => {
+    get<Summary>("/summary").then(
+      (s) => setToReview((s.pending_flagged ?? 0) + (s.by_status.HELD ?? 0) + (s.by_status.INVALID ?? 0)),
+      () => setToReview(0));
+  }, [path]);
 
   // Donor and claim pages are public: no operator navigation, their own simple header.
   if (path.startsWith("/donor") || path.startsWith("/claim")) {
@@ -111,26 +95,22 @@ export function Shell({ children }: { children: React.ReactNode }) {
   }
 
   return (
-    <div className="min-h-screen md:flex">
-      <aside className="sticky top-0 z-20 border-b border-zinc-200 bg-zinc-100/80 backdrop-blur md:h-screen md:w-56 md:shrink-0 md:border-r md:border-b-0 md:bg-zinc-100/60">
-        <div className="flex h-12 items-center justify-between px-4 md:h-14">
-          <Link href="/" className="flex items-center gap-2.5 text-[15px] font-semibold text-zinc-900"><Logo /> AidFlow</Link>
-          <span className="md:hidden"><NetworkPill /></span>
+    <div className="min-h-screen">
+      <header className="sticky top-0 z-20 border-b border-zinc-200/80 bg-white/90 backdrop-blur">
+        <div className="mx-auto flex max-w-[1200px] flex-wrap items-center gap-x-6 px-4 sm:px-6">
+          <Link href="/" className="flex h-14 items-center gap-2.5 text-[15px] font-semibold text-zinc-900"><Logo /> AidFlow</Link>
+          <nav aria-label="Main" className="-mx-1 order-last flex w-full gap-1 overflow-x-auto px-1 pb-2 md:order-none md:w-auto md:pb-0">
+            {OPS.map((l) => <NavLink key={l.href} {...l} active={isActive(l.href)} badge={l.href === "/review" ? toReview : undefined} />)}
+          </nav>
+          <div className="ml-auto flex h-14 items-center gap-4">
+            <Link href="/donor" className="hidden text-[13px] text-zinc-500 hover:text-zinc-900 lg:inline">Donor view</Link>
+            <Link href="/claim" className="hidden text-[13px] text-zinc-500 hover:text-zinc-900 lg:inline">Claim page</Link>
+            <span className="hidden sm:inline-flex"><NetworkPill /></span>
+            <ReviewerField />
+          </div>
         </div>
-        <nav className="dock-strip flex gap-1 overflow-x-auto px-3 pb-2 md:flex-col md:gap-0.5 md:overflow-visible md:pb-0">
-          {OPS.map((l) => <NavLink key={l.href} {...l} active={isActive(l.href)} />)}
-          <div className="hidden px-2 pt-5 pb-1 text-[11px] font-medium text-zinc-400 md:block">Public</div>
-          <NavLink href="/donor" label="Donor view" icon="globe" active={false} />
-          <NavLink href="/claim" label="Claim payout" icon="wallet" active={false} />
-        </nav>
-        <div className="absolute inset-x-0 bottom-0 hidden flex-col gap-3 border-t border-zinc-200 p-3 md:flex">
-          <ReviewerField />
-          <NetworkPill />
-        </div>
-      </aside>
-      <main className="min-w-0 flex-1">
-        <div className="mx-auto max-w-6xl px-4 py-6 sm:px-8 md:py-8">{children}</div>
-      </main>
+      </header>
+      <main className="mx-auto max-w-[1200px] px-4 py-8 sm:px-6">{children}</main>
     </div>
   );
 }

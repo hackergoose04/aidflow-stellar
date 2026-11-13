@@ -263,10 +263,10 @@ export function useReviewer(): [string, (v: string) => void] {
   return [name, update];
 }
 
-/** Inline reviewer field. On wide screens the sidebar has one, so `compact` hides it there. */
+/** Inline reviewer field. The top bar always has one, so `compact` hides this copy. */
 export function ReviewerInput({ value, onChange, compact = false }: { value: string; onChange: (v: string) => void; compact?: boolean }) {
   return (
-    <label className={`flex items-center gap-2 text-[13px] text-zinc-500 ${compact ? "md:hidden" : ""}`}>
+    <label className={`flex items-center gap-2 text-[13px] text-zinc-500 ${compact ? "hidden" : ""}`}>
       Reviewing as
       <input value={value} onChange={(e) => onChange(e.target.value)} placeholder="Your name" className="input w-36" />
     </label>
