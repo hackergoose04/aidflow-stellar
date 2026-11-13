@@ -1,11 +1,12 @@
 # What `vercel deploy` from a laptop must not upload (Git deploys only see committed files).
+# Vercel also applies this file to Git deploys of every project in the repo, so `frontend` must
+# not be listed: aidflow-web builds from it. The API's function bundle leaves it out via vercel.json.
 .env
 .env.local
 .venv
 **/__pycache__
 .vercel
 data
-frontend
 contracts
 docs
 scripts
