@@ -47,27 +47,57 @@ export interface FlagInfo {
 }
 
 /** Turn a backend flag like "shared_wallet_with:BEN-005" into words a reviewer understands. */
-export function describeFlag(flag: string): FlagInfo {
+export function describeFlag(flag: string, payment?: { amount: string; asset: string }): FlagInfo {
   const i = flag.indexOf(":");
   const key = i < 0 ? flag : flag.slice(0, i);
   const value = i < 0 ? undefined : flag.slice(i + 1);
   switch (key) {
     case "amount_above_limit":
-      return { label: "Large amount", detail: `Above the ${value} limit`, source: "rule" };
+      return { label: "Amount above maximum", detail: payment
+        ? `${formatAmount(payment.amount)} ${payment.asset} exceeds the configured maximum of ${formatAmount(value ?? "0")} ${payment.asset}.`
+        : `Above the configured maximum of ${value}.`, source: "rule" };
+    case "amount_below_minimum":
+      return { label: "Amount below minimum", detail: payment
+        ? `${formatAmount(payment.amount)} ${payment.asset} is below the configured minimum of ${formatAmount(value ?? "0")} ${payment.asset}.`
+        : `Below the configured minimum of ${value}.`, source: "rule" };
+    case "outside_payment_window":
+      return { label: "Outside payment window", detail: `Allowed payment time: ${value}.`, source: "rule" };
     case "shared_wallet_with":
       return { label: "Shared wallet", detail: `Same wallet as ${value}`, source: "rule" };
     case "possible_duplicate_of":
-      return { label: "Possible duplicate", detail: `Same person and amount within 24 h as ${value}`, source: "rule" };
+      return { label: "Possible duplicate", detail: `Same beneficiary ID and amount within the duplicate review window: ${value}`, source: "rule" };
     case "same_batch_as":
-      return { label: "Repeated payout slot", detail: `Same person and payout slot in this batch: ${value}`, source: "rule" };
+      return { label: "Repeated payout slot", detail: `Same beneficiary ID and payout slot in this batch: ${value}`, source: "rule" };
     case "additional_payout":
       return { label: "Additional payout", detail: `Review the ${value} payout separately`, source: "rule" };
+    case "earlier_installment": {
+      const [actual, expected] = value?.split("/") ?? [];
+      return {
+        label: "Earlier installment",
+        detail: actual && expected
+          ? `Reported installment ${actual}. The batch schedule expects installment ${expected}. Verify whether the earlier payment was authorized as backpay.`
+          : "Compare the reported installment with the batch schedule and verify any backpay authorization.",
+        source: "rule",
+      };
+    }
+    case "earlier_benefit_month": {
+      const [actual, expected] = value?.split("/") ?? [];
+      return {
+        label: "Earlier benefit month",
+        detail: actual && expected
+          ? `Reported benefit month ${actual}. The batch schedule expects ${expected}. Verify whether the earlier payment was authorized as backpay.`
+          : "Compare the reported benefit month with the batch schedule and verify any backpay authorization.",
+        source: "rule",
+      };
+    }
     case "wallet_changed":
       return { label: "Wallet changed", detail: "Earlier requests used a different wallet", source: "rule" };
     case "invalid":
       return { label: "Invalid record", detail: (value ?? "").replaceAll("_", " "), source: "rule" };
+    case "held":
+      return { label: "Held for review", detail: "A reviewer put this request on hold.", source: "rule" };
     case "ml_high_risk":
-      return { label: "Unusual pattern", detail: `Model risk ${value}: stranger than most requests`, source: "ml" };
+      return { label: "Model score reached the ML cutoff", detail: `Anomaly score percentile ${Number(value).toLocaleString("en-US", { style: "percent", maximumFractionDigits: 1 })} against the model’s reference data.`, source: "ml" };
     default:
       return { label: key, detail: value ?? "", source: "rule" };
   }

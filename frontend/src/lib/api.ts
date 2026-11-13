@@ -45,6 +45,8 @@ export interface AidRequest {
   request_ref: string;
   batch_id: string | null;
   payout_slot: string;
+  installment?: number | null;
+  benefit_month?: string | null;
   beneficiary_id: string;
   wallet: string;
   amount: string;
@@ -53,6 +55,7 @@ export interface AidRequest {
   status: Status;
   flags: string[];
   risk_score: number | null;
+  risk_signals?: string[] | null;
   method: "payment" | "claimable_balance" | null;
   tx_hash: string | null;
   submitted_at: string | null;
@@ -77,6 +80,21 @@ export interface BatchSummary {
   confirmed: number;
   flagged: number;
   amount: number;
+}
+
+export interface ScreeningPolicy {
+  min_amount: string | null;
+  max_amount: string | null;
+  payment_window: { start: string; end: string; timezone: string; weekdays_only: boolean } | null;
+}
+
+export interface PolicyPreview {
+  pending: number;
+  flagged: number;
+  newly_flagged: number;
+  cleared: number;
+  amount_flags: number;
+  time_flags: number;
 }
 
 export interface DurationStats { n: number; median_s: number | null; max_s: number | null }
@@ -133,10 +151,15 @@ export interface PublicClaimable {
 export interface Summary {
   by_status: Record<Status, number>;
   pending_flagged: number;
+  review_reasons?: Record<string, number>;
   recon: Record<ReconCategory, number>;
   last_recon: string | null;
   batches: BatchSummary[];
   risk_histogram: number[];
+  risk_histogram_flagged?: number[];
+  risk_threshold?: number | null;
+  asset_code?: string;
+  screening_policy_editable?: boolean;
   registry: {
     enabled: boolean;
     contract: string | null;
@@ -252,6 +275,11 @@ export interface ChainOp {
   amount: string;
   asset: string;
   memo_hex: string | null;
+}
+
+export interface CutoffPreview {
+  current: { ml_flags: number; review: number };
+  preview: { ml_flags: number; review: number };
 }
 
 export interface ReconResult {

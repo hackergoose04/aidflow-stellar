@@ -1,8 +1,9 @@
 "use client";
 
-import { Bar, BarChart, CartesianGrid, Cell, ReferenceLine, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
+import { Bar, BarChart, CartesianGrid, Cell, Pie, PieChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
 import { STATUSES, type BatchSummary, type Status } from "@/lib/api";
-import { STATUS_STYLE } from "@/lib/format";
+import { describeFlag, STATUS_STYLE } from "@/lib/format";
+import { CutoffPreview } from "@/components/CutoffPreview";
 
 const axis = { fontSize: 11, fill: "#a1a1aa" };
 const tooltipStyle = {
@@ -35,24 +36,84 @@ export function StatusBreakdown({ counts }: { counts: Record<Status, number> }) 
   );
 }
 
-export function RiskHistogram({ bins, threshold }: { bins: number[]; threshold: number }) {
-  const data = bins.map((n, i) => ({ range: `${(i / 10).toFixed(1)}`, n, high: (i + 1) / 10 > threshold }));
+export function RiskHistogram({ bins, flagged = [], threshold }: { bins: number[]; flagged?: number[]; threshold: number | null }) {
+  const data = bins.map((n, i) => ({ range: `${(i / 10).toFixed(1)}`, below: n - (flagged[i] ?? 0), above: flagged[i] ?? 0 }));
   return (
-    <div className="h-44">
-      <ResponsiveContainer>
-        <BarChart data={data} margin={{ left: -24, right: 4, top: 4, bottom: 0 }} barCategoryGap={3}>
-          <CartesianGrid vertical={false} stroke="#f4f4f5" />
-          <XAxis dataKey="range" tick={axis} tickLine={false} axisLine={{ stroke: "#e4e4e7" }} />
-          <YAxis allowDecimals={false} tick={axis} tickLine={false} axisLine={false} />
-          <Tooltip contentStyle={tooltipStyle} cursor={cursor}
-            labelFormatter={(l) => `Risk ${l}–${(Number(l) + 0.1).toFixed(1)}`} />
-          <ReferenceLine x={(Math.floor(threshold * 10) / 10).toFixed(1)} stroke="#a1a1aa" strokeDasharray="3 3" />
-          <Bar dataKey="n" name="Requests" radius={[3, 3, 0, 0]} isAnimationActive={false}>
-            {data.map((d) => <Cell key={d.range} fill={d.high ? "#f43f5e" : "#d4d4d8"} />)}
-          </Bar>
-        </BarChart>
-      </ResponsiveContainer>
+    <div>
+      <div className="h-44">
+        <ResponsiveContainer>
+          <BarChart data={data} margin={{ left: -24, right: 4, top: 4, bottom: 0 }} barCategoryGap={3}>
+            <CartesianGrid vertical={false} stroke="#f4f4f5" />
+            <XAxis dataKey="range" tick={axis} tickLine={false} axisLine={{ stroke: "#e4e4e7" }} />
+            <YAxis allowDecimals={false} tick={axis} tickLine={false} axisLine={false} />
+            <Tooltip contentStyle={tooltipStyle} cursor={cursor}
+              labelFormatter={(l) => `Risk ${l}–${(Number(l) + 0.1).toFixed(1)}`} />
+            <Bar dataKey="below" name="Below ML cutoff" stackId="risk" fill="#d4d4d8" isAnimationActive={false} />
+            <Bar dataKey="above" name="At or above ML cutoff" stackId="risk" fill="#dc2626" isAnimationActive={false} />
+          </BarChart>
+        </ResponsiveContainer>
+      </div>
+      <div className="mt-2 flex flex-wrap gap-x-4 gap-y-1 text-[12px] text-zinc-600">
+        <span className="inline-flex items-center gap-1.5"><span className="size-2 rounded-sm bg-zinc-300" /> Below ML cutoff</span>
+        <span className="inline-flex items-center gap-1.5"><span className="size-2 rounded-sm bg-red-600" /> At or above ML cutoff</span>
+        {threshold !== null && <span>Current ML cutoff: {Number(threshold.toFixed(6))}</span>}
+      </div>
+      <p className="mt-2 text-[12px] text-zinc-500">Colors reflect the ML cutoff used when each request was scored. Rules such as duplicates can send lower-scoring requests to Review.</p>
+      {threshold !== null && <CutoffPreview key={threshold} threshold={threshold} />}
     </div>
+  );
+}
+
+export function StatusDonut({ counts }: { counts: Record<Status, number> }) {
+  const data = STATUSES.filter((status) => counts[status] > 0).map((status) => ({
+    status, name: STATUS_STYLE[status].label, count: counts[status],
+  }));
+  const total = data.reduce((sum, item) => sum + item.count, 0);
+  if (!total) return <p className="text-[13px] text-zinc-500">No requests yet.</p>;
+  return (
+    <div className="flex flex-wrap items-center gap-5">
+      <div className="relative mx-auto size-40 shrink-0">
+        <ResponsiveContainer>
+          <PieChart>
+            <Pie data={data} dataKey="count" nameKey="name" innerRadius="65%" outerRadius="98%" stroke="none" isAnimationActive={false}>
+              {data.map(({ status }) => <Cell key={status} fill={STATUS_STYLE[status].dot} />)}
+            </Pie>
+            <Tooltip contentStyle={tooltipStyle} />
+          </PieChart>
+        </ResponsiveContainer>
+        <div className="pointer-events-none absolute inset-0 grid content-center text-center">
+          <strong className="text-[22px] tabular-nums">{total.toLocaleString()}</strong>
+          <span className="text-[12px] text-zinc-500">requests</span>
+        </div>
+      </div>
+      <ul className="grid min-w-36 flex-1 grid-cols-[repeat(auto-fit,minmax(9rem,1fr))] gap-x-5 gap-y-2 text-[13px]">
+        {STATUSES.map((status) => <li key={status} className={`flex items-center gap-2 ${counts[status] ? "" : "opacity-50"}`}>
+          <span className="size-2 shrink-0 rounded-sm" style={{ background: STATUS_STYLE[status].dot }} />
+          <span className="flex-1 text-zinc-600">{STATUS_STYLE[status].label}</span>
+          <span className="tabular-nums">{(counts[status] ?? 0).toLocaleString()}</span>
+        </li>)}
+      </ul>
+    </div>
+  );
+}
+
+export function ReviewReasonBars({ reasons, total }: { reasons: Record<string, number>; total: number }) {
+  const ordered = Object.entries(reasons).sort(([a, n], [b, m]) => m - n || a.localeCompare(b));
+  if (!total) return <p className="text-[13px] text-zinc-500">No requests need review.</p>;
+  return (
+    <>
+      <p className="mb-4 text-[12px] text-zinc-500">{total.toLocaleString()} requests need review. Each request counts once per reason and can appear in multiple bars.</p>
+      <ul className="space-y-3">
+        {ordered.map(([reason, count]) => <li key={reason}>
+          <div className="mb-1 flex justify-between gap-3 text-[13px]">
+            <span>{describeFlag(reason).label}</span><span className="tabular-nums">{count.toLocaleString()}</span>
+          </div>
+          <div className="h-2 rounded bg-zinc-100" aria-hidden="true">
+            <div className="h-full rounded bg-amber-500" style={{ width: `${count / total * 100}%` }} />
+          </div>
+        </li>)}
+      </ul>
+    </>
   );
 }
 

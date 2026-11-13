@@ -20,6 +20,9 @@ FEATURES = [
     "ben_wallet_count",     # distinct wallets used by this beneficiary (wallet switch)
 ]
 NO_NEIGHBOUR_GAP_HOURS = 24 * 60.0
+FIXED_HISTORY_VERSION = "fixed-reference-v1"
+# Amount and wall-clock time are policy checks. Relative gaps still describe activity history.
+BEHAVIOR_FEATURES = ["ben_requests_24h", "log_gap_hours", "wallet_ben_count", "ben_wallet_count"]
 
 
 def build_features(df: pd.DataFrame) -> pd.DataFrame:
@@ -58,4 +61,54 @@ def build_features(df: pd.DataFrame) -> pd.DataFrame:
         "log_gap_hours": np.log1p(gap),
         "wallet_ben_count": df.groupby("wallet")["beneficiary_id"].transform("nunique").to_numpy(),
         "ben_wallet_count": df.groupby("beneficiary_id")["wallet"].transform("nunique").to_numpy(),
+    }, index=df.index)[FEATURES]
+
+
+def build_fixed_features(df: pd.DataFrame, amount_median: float) -> pd.DataFrame:
+    """Use a frozen amount baseline and only strictly earlier, available history."""
+    created = pd.to_datetime(df["created_at"], utc=True, format="ISO8601")
+    available = pd.to_datetime(df["available_at"], utc=True, format="ISO8601")
+    times = created.to_numpy(dtype="datetime64[ns]")
+    arrival = available.to_numpy(dtype="datetime64[ns]")
+    hours = (created.dt.hour + created.dt.minute / 60).to_numpy()
+    amount = df["amount"].astype(float).to_numpy()
+    wallets = df["wallet"].to_numpy()
+    beneficiaries = df["beneficiary_id"].to_numpy()
+    n = len(df)
+    relative_own = amount / amount_median
+    counts = np.zeros(n)
+    same = np.zeros(n)
+    gap = np.full(n, NO_NEIGHBOUR_GAP_HOURS)
+    ben_wallets = np.ones(n)
+    wallet_bens = np.ones(n)
+
+    for indices in df.groupby("beneficiary_id", sort=False).indices.values():
+        for i in indices:
+            past = indices[(arrival[indices] < arrival[i]) & (times[indices] < times[i])]
+            if not len(past):
+                continue
+            age = (times[i] - times[past]) / np.timedelta64(1, "h")
+            recent = age <= 24
+            relative_own[i] = amount[i] / np.median(amount[past])
+            counts[i] = recent.sum()
+            same[i] = (recent & (amount[past] == amount[i])).sum()
+            gap[i] = age.min()
+            ben_wallets[i] = len(set(wallets[past]) | {wallets[i]})
+
+    for indices in df.groupby("wallet", sort=False).indices.values():
+        for i in indices:
+            past = indices[(arrival[indices] < arrival[i]) & (times[indices] < times[i])]
+            wallet_bens[i] = len(set(beneficiaries[past]) | {beneficiaries[i]})
+
+    return pd.DataFrame({
+        "log_amount": np.log1p(amount),
+        "amount_vs_global": amount / amount_median,
+        "amount_vs_own": relative_own,
+        "hour_sin": np.sin(2 * np.pi * hours / 24),
+        "hour_cos": np.cos(2 * np.pi * hours / 24),
+        "ben_requests_24h": counts,
+        "same_amount_24h": same,
+        "log_gap_hours": np.log1p(gap),
+        "wallet_ben_count": wallet_bens,
+        "ben_wallet_count": ben_wallets,
     }, index=df.index)[FEATURES]

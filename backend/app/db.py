@@ -44,14 +44,19 @@ CREATE TABLE IF NOT EXISTS requests (
     request_ref    TEXT PRIMARY KEY,
     batch_id       TEXT,
     payout_slot    {PAYOUT_SLOT_COLUMN},
+    installment    BIGINT,
+    benefit_month  TEXT,
     beneficiary_id TEXT NOT NULL,
     wallet         TEXT NOT NULL,
     amount         TEXT NOT NULL,      -- 7-decimal string, same format as Horizon
     asset          TEXT NOT NULL,
     created_at     TEXT NOT NULL,      -- ISO 8601 UTC
+    available_at   TEXT,               -- when the current request values became visible
     status         TEXT NOT NULL,
     flags          TEXT NOT NULL DEFAULT '[]',  -- JSON list of reasons for the reviewer
     risk_score     {real},             -- from the ML model, when available
+    risk_signals   TEXT,               -- JSON list of model sensitivity results
+    screening_policy TEXT,             -- JSON policy selected for this request
     method         TEXT,               -- payment | claimable_balance
     tx_hash        TEXT,
     submitted_at   TEXT,
@@ -81,6 +86,13 @@ CREATE TABLE IF NOT EXISTS events (
     at          TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_events_ref ON events(request_ref);
+
+CREATE TABLE IF NOT EXISTS screening_policies (
+    program TEXT NOT NULL,
+    asset TEXT NOT NULL,
+    settings TEXT NOT NULL,
+    PRIMARY KEY (program, asset)
+);
 """
 
 
@@ -90,6 +102,8 @@ POSTGRES_SCHEMA = _schema("BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY", "DO
 
 # Columns added after the first release: added to existing databases on connect.
 MIGRATIONS = {"batch_id": "TEXT", "payout_slot": PAYOUT_SLOT_COLUMN,
+              "installment": "BIGINT", "benefit_month": "TEXT", "available_at": "TEXT", "risk_signals": "TEXT",
+              "screening_policy": "TEXT",
               "recon_status": "TEXT", "recon_reasons": "TEXT", "recon_at": "TEXT",
               "registry_key": "TEXT", "registry_status": "TEXT",
               "balance_id": "TEXT", "claim_status": "TEXT", "claimed_at": "TEXT"}
@@ -203,6 +217,8 @@ def to_dict(row) -> dict | None:
     d = dict(row)
     if "flags" in d:
         d["flags"] = json.loads(d["flags"])
+    if d.get("risk_signals"):
+        d["risk_signals"] = json.loads(d["risk_signals"])
     if d.get("recon_reasons"):
         d["recon_reasons"] = json.loads(d["recon_reasons"])
     return d

@@ -25,7 +25,7 @@ def database(tmp_path, monkeypatch):
         import psycopg
 
         with psycopg.connect(TEST_DATABASE_URL, autocommit=True) as conn:
-            conn.execute("DROP TABLE IF EXISTS requests, events")
+            conn.execute("DROP TABLE IF EXISTS requests, events, screening_policies")
         db._migrated.discard(TEST_DATABASE_URL)  # the next connect() creates the schema again
     yield
 

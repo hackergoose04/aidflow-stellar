@@ -4,16 +4,20 @@ from __future__ import annotations
 
 import csv
 import hmac
+import json
 import sqlite3
 from types import SimpleNamespace
 
 import pytest
+import pandas as pd
 from fastapi.testclient import TestClient
 from stellar_sdk import Account, Keypair, scval
 
 from backend.app import config, db, registry, stellar_client as sc
 from backend.app.main import app
 from backend.app.services import screening
+from ml.features import BEHAVIOR_FEATURES, build_fixed_features
+from ml.train import fit_fixed_model
 
 from conftest import sqlite_only
 
@@ -26,6 +30,7 @@ REJECTED_AT_INGEST = {"duplicate_ref", "invalid_wallet", "invalid_amount"}
 def client(tmp_path, monkeypatch):
     monkeypatch.setattr(config, "DB_PATH", tmp_path / "test.db")
     monkeypatch.setenv("PII_HMAC_SECRET", "test-secret")
+    monkeypatch.setenv("SCREENING_POLICY_EDITING", "on")
     return TestClient(app)
 
 
@@ -39,13 +44,15 @@ def labels() -> list[tuple[str, str]]:
         return [(r["request_ref"], r["label"]) for r in csv.DictReader(f)]
 
 
-def test_every_planted_problem_is_caught(client):
+def test_rules_catch_planted_validation_errors_and_duplicates(client):
     report = upload(client).json()
     rejected = {r["request_ref"]: r["reasons"] for r in report["rejected"]}
     rows = {r["request_ref"]: r for r in client.get("/requests").json()}
 
     missed = []
     for ref, label in labels():
+        if label in {"night_new_ben", "amount_outlier", "burst"}:
+            continue  # These need a compatible model or explicit amount/time policy.
         if label in REJECTED_AT_INGEST:
             ok = label in rejected.get(ref, [])
             if label != "duplicate_ref":  # bad records are kept as INVALID for correction
@@ -66,10 +73,133 @@ def test_few_false_alarms_on_normal_rows(client):
     assert len(flagged) / len(normal) < 0.15, [(r["request_ref"], r["flags"]) for r in flagged]
 
 
-def test_risk_scores_are_set(client):
+def test_incompatible_legacy_model_is_not_applied(client):
+    assert client.get("/summary").json()["risk_threshold"] is None
     upload(client)
     scores = [r["risk_score"] for r in client.get("/requests").json() if r["status"] != "INVALID"]
-    assert all(s is not None and 0 <= s <= 1 for s in scores)
+    assert scores and all(s is None for s in scores)
+
+
+def test_behavior_model_excludes_amount_and_wall_clock(client, monkeypatch):
+    days = pd.date_range("2026-08-01T10:00:00Z", periods=280, freq="4h").map(lambda ts: ts.isoformat())
+    history = pd.DataFrame({"beneficiary_id": ["a", "b"] * 140, "wallet": ["wa", "wb"] * 140,
+                            "amount": [50, 100] * 140, "asset": "AIDUSD", "created_at": days,
+                            "available_at": days})
+    bundle, _ = fit_fixed_model(history, history.index < 260, history.index >= 260,
+                                program=registry.program(), columns=BEHAVIOR_FEATURES, review_budget=0.25)
+    assert bundle["model"].n_estimators == 300 and bundle["model"].max_samples == 256
+    monkeypatch.setattr(screening.ml, "load", lambda: bundle)
+    assert client.get("/summary").json()["risk_threshold"] == bundle["threshold"]
+    assert upload(client).status_code == 200
+    scored = [row for row in client.get("/requests").json() if row["status"] != "INVALID"]
+    assert all(0 <= row["risk_score"] <= 1 for row in scored)
+    assert all(set(row["risk_signals"] or []) <= {"recent_activity", "wallet_history"} for row in scored)
+
+
+def test_risk_histogram_separates_ml_flags_from_rules_at_cutoff(client, monkeypatch):
+    cutoff = 0.901325
+    scores = {"AMOUNT": 0.9013, "AT": cutoff, "ABOVE": 0.9014}
+    monkeypatch.setattr(screening.ml, "active_threshold", lambda *_: cutoff)
+    monkeypatch.setattr(screening.ml, "uses_validation_reference", lambda: True)
+    monkeypatch.setattr(screening.ml, "score_frame", lambda history: history["request_ref"].map(scores).to_numpy())
+    monkeypatch.setattr(screening.ml, "explain_flags", lambda *_: {})
+    monkeypatch.setattr(config, "AMOUNT_LIMIT", 500)
+
+    header = "request_ref,beneficiary_id,wallet,amount,asset,created_at\n"
+    rows = "".join(
+        f"{ref},{ref},{Keypair.random().public_key},{amount},AIDUSD,2026-11-10T15:00:00Z\n"
+        for ref, amount in [("AMOUNT", 750), ("AT", 10), ("ABOVE", 10)]
+    )
+    assert set(upload(client, header + rows).json()["flagged"]) == set(scores)
+    stored = {row["request_ref"]: row["risk_score"] for row in client.get("/requests").json()}
+    assert stored == scores
+    summary = client.get("/summary").json()
+    assert summary["risk_histogram"] == [0] * 9 + [3]
+    assert summary["risk_histogram_flagged"] == [0] * 9 + [2]
+    assert summary["review_reasons"] == {"amount_above_limit": 1, "ml_high_risk": 2}
+
+    for candidate, expected in [(0.9, (3, 3)), (cutoff, (2, 3)), (0.90135, (1, 2))]:
+        result = client.get("/ml/cutoff-preview", params={"cutoff": candidate})
+        assert result.status_code == 200
+        assert result.json() == {
+            "current": {"ml_flags": 2, "review": 3},
+            "preview": {"ml_flags": expected[0], "review": expected[1]},
+        }
+    assert client.get("/ml/cutoff-preview", params={"cutoff": 1.1}).status_code == 422
+    assert client.get("/summary").json() == summary
+
+
+def test_policy_preview_save_and_upload(client, monkeypatch):
+    monkeypatch.setattr(config, "AMOUNT_LIMIT", None)
+
+    def payment(ref, amount, at):
+        return f"{ref},{ref},{Keypair.random().public_key},{amount},AIDUSD,{at}\n"
+
+    header = "request_ref,beneficiary_id,wallet,amount,asset,created_at\n"
+    valid = "2026-11-10T15:00:00Z"
+    rows = payment("IN", 50, valid) + payment("LOW", 10, valid) + payment("HIGH", 150, valid)
+    rows += payment("LATE", 50, "2026-11-10T23:01:00Z")
+    rows += payment("WEEKEND", 50, "2026-11-14T15:00:00Z")
+    rows += payment("CLOSED", 10, valid)
+    assert upload(client, header + rows).json()["flagged"] == []
+    assert client.post("/requests/CLOSED/approve", json={"reviewer": "alice"}).status_code == 200
+    policy = {"min_amount": "20", "max_amount": "100", "payment_window": {
+        "start": "09:00", "end": "17:00", "timezone": "America/Toronto", "weekdays_only": True,
+    }}
+    assert client.post("/screening-policy/preview", json={**policy, "min_amount": "200"}).status_code == 422
+    assert client.post("/screening-policy/preview", json=policy).json() == {
+        "pending": 5, "flagged": 4, "newly_flagged": 4, "cleared": 0, "amount_flags": 2, "time_flags": 2,
+    }
+    assert client.get("/summary").json()["pending_flagged"] == 0
+    changed = client.post("/screening-policy", json={"policy": policy, "reviewer": "alice", "apply_pending": True})
+    assert changed.status_code == 200
+    assert client.get("/summary").json()["pending_flagged"] == 4
+    assert client.get("/summary").json()["review_reasons"] == {
+        "amount_below_minimum": 1, "amount_above_limit": 1, "outside_payment_window": 2,
+    }
+    assert client.get("/requests/CLOSED").json()["flags"] == []
+    assert client.get("/requests/LOW").json()["flags"] == ["amount_below_minimum:20"]
+    assert client.get("/requests/LATE").json()["flags"][0].startswith("outside_payment_window:")
+    assert upload(client, header + payment("FUTURE", 120, valid)).json()["flagged"] == ["FUTURE"]
+    assert client.post("/screening-policy", json={"policy": {}, "reviewer": "alice"}).status_code == 200
+    assert client.get("/requests/FUTURE").json()["flags"] == ["amount_above_limit:100"]
+    monkeypatch.setenv("SCREENING_POLICY_EDITING", "off")
+    assert client.post("/screening-policy", json={"policy": {}, "reviewer": "alice"}).status_code == 403
+
+
+def test_fixed_reference_ignores_later_uploads_and_same_upload_history():
+    first = {"beneficiary_id": "a", "wallet": "w1", "amount": 50,
+             "created_at": "2026-10-01T10:00:00Z", "available_at": "2026-10-01T10:01:00Z"}
+    target = {**first, "amount": 100, "created_at": "2026-10-01T11:00:00Z",
+              "available_at": "2026-10-01T11:01:00Z"}
+    baseline = build_fixed_features(pd.DataFrame([first, target]), 50)
+    same_upload = {**target, "amount": 5000, "created_at": "2026-10-01T10:50:00Z"}
+    late = {**first, "amount": 6000, "wallet": "w2", "available_at": "2026-10-02T00:00:00Z"}
+    expanded = build_fixed_features(pd.DataFrame([first, target, same_upload, late]), 50)
+    pd.testing.assert_series_equal(baseline.iloc[1], expanded.iloc[1])
+    assert baseline.iloc[1]["amount_vs_global"] == 2
+    assert baseline.iloc[1]["amount_vs_own"] == 2
+    assert baseline.iloc[1]["ben_requests_24h"] == 1
+
+
+def test_amount_review_threshold_is_optional_and_allows_individual_approval(client, monkeypatch):
+    monkeypatch.setattr(screening.ml, "score_frame", lambda _: None)
+    header = "request_ref,beneficiary_id,wallet,amount,asset,created_at\n"
+
+    def payment(ref, amount):
+        return f"{ref},{ref},{Keypair.random().public_key},{amount},AIDUSD,2026-10-01T10:00:00Z\n"
+
+    monkeypatch.setenv("AMOUNT_LIMIT", "500")
+    monkeypatch.setattr(config, "AMOUNT_LIMIT", config.load_amount_limit())
+    report = upload(client, header + payment("AT", 500) + payment("ABOVE", 750)).json()
+    assert report["accepted"] == 2 and report["flagged"] == ["ABOVE"]
+    approved = client.post("/requests/ABOVE/approve", json={"reviewer": "alice"}).json()
+    assert approved["status"] == "APPROVED" and approved["flags"] == ["amount_above_limit:500"]
+
+    monkeypatch.setenv("AMOUNT_LIMIT", "off")
+    monkeypatch.setattr(config, "AMOUNT_LIMIT", config.load_amount_limit())
+    report = upload(client, header + payment("OFF", 750)).json()
+    assert report["accepted"] == 1 and report["flagged"] == []
 
 
 def test_reupload_is_rejected_not_overwritten(client):
@@ -102,7 +232,7 @@ def test_review_flow(client):
 
 def test_hold_then_decide(client):
     upload(client)
-    ref = client.get("/requests?flagged=true").json()[0]["request_ref"]
+    ref = client.get("/requests?status=PENDING_REVIEW&flagged=true").json()[0]["request_ref"]
     r = client.post(f"/requests/{ref}/hold", json={"reviewer": "alice", "note": "call beneficiary"})
     assert r.json()["status"] == "HELD"
     # Held requests are not swept up by bulk approval.
@@ -232,6 +362,89 @@ def test_unknown_slots_are_rejected_and_extra_slots_require_registry(client, mon
     assert result == [{"request_ref": "R-1", "status": "APPROVED",
                        "error": "On-chain registry must be configured for this payout"}]
     assert client.get("/requests/R-1").json()["tx_hash"] is None
+
+
+def test_installment_screening_uses_only_the_approved_batch_schedule(client, monkeypatch):
+    monkeypatch.setattr(config, "BATCH_INSTALLMENT_SCHEDULE", {"BATCH-16": 16})
+    monkeypatch.setattr(screening.ml, "score_frame", lambda _: None)
+    inputs = [
+        ("EARLIER", "BATCH-16", "7"),
+        ("ON_TIME", "BATCH-16", "16"),
+        ("MISSING", "BATCH-16", ""),
+        ("UNUSABLE", "BATCH-16", "7.5"),
+        ("UNSCHEDULED", "OTHER", "7"),
+    ]
+    header = "request_ref,batch_id,installment,scheduled_installment,beneficiary_id,wallet,amount,asset,created_at\n"
+    rows = [f"{ref},{batch},{actual},1,{ref},{Keypair.random().public_key},50,AIDUSD,2026-11-01T10:00:00Z\n"
+            for ref, batch, actual in inputs]
+    report = upload(client, header + "".join(rows)).json()
+    assert report["accepted"] == len(inputs)
+    assert report["flagged"] == ["EARLIER"]
+    row = client.get("/requests/EARLIER").json()
+    assert row["installment"] == 7
+    assert row["flags"] == ["earlier_installment:7/16"]
+    assert client.get("/requests/UNUSABLE").json()["installment"] is None
+
+    approved = client.post("/review/approve-clean", json={"reviewer": "alice"}).json()
+    assert set(approved["request_refs"]) == {"ON_TIME", "MISSING", "UNUSABLE", "UNSCHEDULED"}
+    invalid = client.post("/requests/EARLIER/correct", json={"reviewer": "alice", "installment": "-1"})
+    assert invalid.status_code == 409
+    corrected = client.post("/requests/EARLIER/correct", json={"reviewer": "alice", "installment": "16"}).json()
+    assert corrected["flags"] == [] and corrected["installment"] == 16
+    events = client.get("/requests/EARLIER").json()["events"]
+    assert any(e["kind"] == "corrected" and json.loads(e["detail"])["changes"]["installment"] == [7, 16]
+               for e in events)
+    cleared = client.post("/requests/EARLIER/correct", json={"reviewer": "alice", "installment": ""}).json()
+    assert cleared["flags"] == [] and cleared["installment"] is None
+
+    if not config.DATABASE_URL:
+        with sqlite3.connect(config.DB_PATH) as conn:
+            conn.execute("ALTER TABLE requests DROP COLUMN installment")
+        legacy = client.get("/requests/EARLIER").json()
+        assert legacy["installment"] is None and legacy["status"] == "PENDING_REVIEW"
+
+
+def test_benefit_month_screening_compares_entitlement_with_the_approved_batch_month(client, monkeypatch):
+    monkeypatch.setenv("BATCH_BENEFIT_MONTH_SCHEDULE", '{"JAN":"2026-01"}')
+    monkeypatch.setattr(config, "BATCH_BENEFIT_MONTH_SCHEDULE", config._load_batch_benefit_month_schedule())
+    monkeypatch.setattr(screening.ml, "score_frame", lambda _: None)
+    inputs = [
+        ("EARLIER", "JAN", "2025-12"),
+        ("SAME", "JAN", "2026-01"),
+        ("LATER", "JAN", "2026-02"),
+        ("MISSING", "JAN", ""),
+        ("UNUSABLE", "JAN", "2025-13"),
+        ("UNSCHEDULED", "OTHER", "2025-12"),
+    ]
+    header = "request_ref,batch_id,benefit_month,expected_benefit_month,beneficiary_id,wallet,amount,asset,created_at\n"
+    rows = [f"{ref},{batch},{month},2025-01,{ref},{Keypair.random().public_key},50,AIDUSD,2026-01-02T10:00:00Z\n"
+            for ref, batch, month in inputs]
+    report = upload(client, header + "".join(rows)).json()
+    assert report["accepted"] == len(inputs)
+    assert report["flagged"] == ["EARLIER"]
+    earlier = client.get("/requests/EARLIER").json()
+    assert earlier["benefit_month"] == "2025-12"
+    assert earlier["flags"] == ["earlier_benefit_month:2025-12/2026-01"]
+    assert client.get("/requests/UNUSABLE").json()["benefit_month"] is None
+
+    approved = client.post("/review/approve-clean", json={"reviewer": "alice"}).json()
+    assert set(approved["request_refs"]) == {"SAME", "LATER", "MISSING", "UNUSABLE", "UNSCHEDULED"}
+    url = "/requests/EARLIER/correct"
+    invalid = client.post(url, json={"reviewer": "alice", "benefit_month": "2026-00"})
+    assert invalid.status_code == 409
+    corrected = client.post(url, json={"reviewer": "alice", "benefit_month": "2026-01"}).json()
+    assert corrected["flags"] == [] and corrected["benefit_month"] == "2026-01"
+    events = client.get("/requests/EARLIER").json()["events"]
+    assert any(e["kind"] == "corrected" and json.loads(e["detail"])["changes"]["benefit_month"]
+               == ["2025-12", "2026-01"] for e in events)
+    cleared = client.post(url, json={"reviewer": "alice", "benefit_month": ""}).json()
+    assert cleared["flags"] == [] and cleared["benefit_month"] is None
+
+    if not config.DATABASE_URL:
+        with sqlite3.connect(config.DB_PATH) as conn:
+            conn.execute("ALTER TABLE requests DROP COLUMN benefit_month")
+        legacy = client.get("/requests/SAME").json()
+        assert legacy["benefit_month"] is None and legacy["status"] == "APPROVED"
 
 
 def test_beneficiary_ids_are_never_stored_raw(client):

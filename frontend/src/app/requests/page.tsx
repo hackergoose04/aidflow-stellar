@@ -5,7 +5,7 @@ import { useRouter, useSearchParams } from "next/navigation";
 import { Suspense, useEffect, useMemo, useState } from "react";
 import { get, STATUSES, type AidRequest, type Status } from "@/lib/api";
 import { formatAmount, formatTime, STATUS_STYLE } from "@/lib/format";
-import { Button, Card, ErrorNote, FlagChips, PageHeader, Select, StatusBadge } from "@/components/ui";
+import { Button, Card, ErrorNote, FlagChips, PageHeader, RiskBar, Select, StatusBadge } from "@/components/ui";
 
 type SortKey = "created_at" | "risk_score" | "amount";
 type RequestGroup = "attention" | "awaiting" | "on-chain" | "closed";
@@ -29,7 +29,7 @@ function RequestsTable() {
   const [query, setQuery] = useState("");
   const [onlyFlagged, setOnlyFlagged] = useState(false);
   const [sort, setSort] = useState<SortKey>("created_at");
-  const [batch, setBatch] = useState("");
+  const [batch, setBatch] = useState(() => params.get("batch") ?? "");
   const [realId, setRealId] = useState("");
 
   useEffect(() => {
@@ -200,7 +200,9 @@ function RequestsTable() {
                     </td>
                     <td className="whitespace-nowrap font-mono text-[12px] text-zinc-600">{r.beneficiary_id}</td>
                     <td className="text-right font-medium tabular-nums">{formatAmount(r.amount)} <span className="text-[11px] font-normal text-zinc-400">{r.asset}</span></td>
-                    <td><RiskLevel score={r.risk_score} /></td>
+                    <td>{r.risk_score === null
+                      ? <span className="text-[12px] text-zinc-400">Not scored</span>
+                      : <RiskBar score={r.risk_score} mlFlagged={r.flags.some((flag) => flag.startsWith("ml_high_risk:"))} />}</td>
                     <td className="max-w-[220px]"><FlagChips flags={r.flags} /></td>
                     <td className="whitespace-nowrap"><StatusBadge status={r.status} /></td>
                     <td className="whitespace-nowrap text-[12px] text-zinc-500">{formatTime(r.created_at)}</td>
@@ -235,18 +237,6 @@ function TabCount({ value }: { value?: number }) {
   return <span className="text-[11px] tabular-nums text-zinc-400">{value ?? "—"}</span>;
 }
 
-function RiskLevel({ score }: { score: number | null }) {
-  if (score === null) return <span className="text-[12px] text-zinc-400">Not scored</span>;
-  const level = score >= 0.9 ? "High" : score >= 0.7 ? "Medium" : "Low";
-  const style = level === "High" ? "bg-rose-50 text-rose-700"
-    : level === "Medium" ? "bg-amber-50 text-amber-700" : "bg-zinc-100 text-zinc-600";
-  return (
-    <span title={`AI risk score ${score.toFixed(3)}`} className={`inline-flex items-center gap-1.5 whitespace-nowrap rounded-md px-2 py-1 text-[12px] font-medium ${style}`}>
-      <span className="font-mono tabular-nums">{score.toFixed(2)}</span>
-      <span>{level}</span>
-    </span>
-  );
-}
 
 function EmptyState({ title, description, action }: { title: string; description: string; action?: React.ReactNode }) {
   return (

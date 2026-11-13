@@ -12,10 +12,10 @@ from stellar_sdk import StrKey
 
 from .. import config, db, identity
 from ..db import Status
-from . import dedup, screening
+from . import dedup, screening, screening_policy
 
 REQUIRED = ["request_ref", "beneficiary_id", "wallet", "amount", "asset", "created_at"]
-OPTIONAL = ["batch_id", "payout_slot"]
+OPTIONAL = ["batch_id", "payout_slot", "installment", "benefit_month"]
 SEVEN_DP = Decimal("0.0000001")
 
 
@@ -65,7 +65,9 @@ def ingest_csv(conn: db.Connection, text: str) -> dict:
     if missing:
         raise ValueError(f"CSV is missing columns: {missing}")
 
-    upload_batch = "UPLOAD-" + datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S")
+    uploaded_at = datetime.now(timezone.utc)
+    upload_batch = "UPLOAD-" + uploaded_at.strftime("%Y%m%d-%H%M%S-%f")
+    settings = screening_policy.current(conn).model_dump_json()
     accepted, rejected, seen = [], [], set()
     for line, row in enumerate(reader, start=2):  # line 1 is the header
         ref = (row.get("request_ref") or "").strip()
@@ -79,6 +81,8 @@ def ingest_csv(conn: db.Connection, text: str) -> dict:
             conn.execute("DELETE FROM requests WHERE request_ref = ?", (ref,))
         batch = (row.get("batch_id") or "").strip() or upload_batch
         slot = (row.get("payout_slot") or "").strip().lower() or config.DEFAULT_PAYOUT_SLOT
+        installment = config.parse_installment(row.get("installment"))
+        benefit_month = config.parse_benefit_month(row.get("benefit_month"))
         row["payout_slot"] = slot
         ben = identity.pseudonymize(row.get("beneficiary_id") or "")
         errors = validate(row)
@@ -92,19 +96,21 @@ def ingest_csv(conn: db.Connection, text: str) -> dict:
                 except ValueError:
                     created = (row.get("created_at") or "").strip()
                 conn.execute(
-                    "INSERT INTO requests (request_ref, batch_id, payout_slot, beneficiary_id, wallet,"
-                    " amount, asset, created_at, status, flags, updated_at)"
-                    " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-                    (ref, batch, slot, ben, (row.get("wallet") or "").strip(), (row.get("amount") or "").strip(),
+                    "INSERT INTO requests (request_ref, batch_id, payout_slot, installment, benefit_month,"
+                    " beneficiary_id, wallet, amount, asset, created_at, status, flags, updated_at, screening_policy)"
+                    " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                    (ref, batch, slot, installment, benefit_month, ben, (row.get("wallet") or "").strip(),
+                     (row.get("amount") or "").strip(),
                      (row.get("asset") or "").strip(), created, Status.INVALID,
-                     json.dumps([f"invalid:{e}" for e in errors]), db.now()))
+                     json.dumps([f"invalid:{e}" for e in errors]), db.now(), settings))
             continue
         seen.add(ref)
         conn.execute(
-            "INSERT INTO requests (request_ref, batch_id, payout_slot, beneficiary_id, wallet,"
-            " amount, asset, created_at, status, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-            (ref, batch, slot, ben, row["wallet"].strip(), normalize_amount(row["amount"]),
-             row["asset"].strip(), parse_time(row["created_at"]), Status.PENDING_REVIEW, db.now()))
+            "INSERT INTO requests (request_ref, batch_id, payout_slot, installment, benefit_month,"
+            " beneficiary_id, wallet, amount, asset, created_at, available_at, status, updated_at, screening_policy)"
+            " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (ref, batch, slot, installment, benefit_month, ben, row["wallet"].strip(), normalize_amount(row["amount"]),
+             row["asset"].strip(), parse_time(row["created_at"]), uploaded_at.isoformat(), Status.PENDING_REVIEW, db.now(), settings))
         accepted.append(ref)
 
     for r in rejected:

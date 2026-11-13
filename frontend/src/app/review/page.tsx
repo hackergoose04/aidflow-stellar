@@ -132,12 +132,12 @@ function ReviewRow({ r, note, setNote, disabled, decide }: {
           <dt className="text-zinc-400">Payout slot</dt><dd className="text-zinc-700">{r.payout_slot}</dd>
           <dt className="text-zinc-400">Wallet</dt><dd className="font-mono text-zinc-700">{shortKey(r.wallet, 6)}</dd>
           <dt className="text-zinc-400">Requested</dt><dd className="text-zinc-700">{formatTime(r.created_at)}</dd>
-          <dt className="text-zinc-400">AI risk</dt><dd><RiskBar score={r.risk_score} /></dd>
+          <dt className="text-zinc-400">AI risk</dt><dd><RiskBar score={r.risk_score} mlFlagged={r.flags.some((flag) => flag.startsWith("ml_high_risk:"))} /></dd>
         </dl>
       </div>
       <div className="min-w-0 md:border-l md:border-zinc-100 md:pl-5">
         <div className="eyebrow mb-2">Why it&apos;s here</div>
-        <FlagChips flags={r.flags} verbose />
+        <FlagChips flags={r.flags} riskSignals={r.risk_signals} payment={r} verbose />
       </div>
       <div className="flex flex-col gap-2">
         {r.status === "HELD" && r.note && <p className="text-[12px] text-zinc-500">Held: “{r.note}”</p>}
